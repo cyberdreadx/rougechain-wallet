@@ -1,0 +1,58 @@
+{
+    "name": "rougechain-wallet",
+    "version": "1.0.0",
+    "description": "Quantum-safe cryptocurrency wallet & encrypted messenger browser extension for RougeChain",
+    "type": "module",
+    "license": "MIT",
+    "author": "CyberDreadX",
+    "homepage": "https://github.com/cyberdreadx/rougechain-wallet#readme",
+    "repository": {
+        "type": "git",
+        "url": "git+https://github.com/cyberdreadx/rougechain-wallet.git"
+    },
+    "bugs": {
+        "url": "https://github.com/cyberdreadx/rougechain-wallet/issues"
+    },
+    "keywords": [
+        "rougechain",
+        "wallet",
+        "browser-extension",
+        "post-quantum",
+        "pqc",
+        "ml-dsa",
+        "ml-kem",
+        "crystals-dilithium",
+        "crystals-kyber",
+        "chrome-extension",
+        "manifest-v3",
+        "cryptocurrency",
+        "quantum-safe"
+    ],
+    "scripts": {
+        "dev": "vite",
+        "build": "vite build",
+        "preview": "vite preview"
+    },
+    "dependencies": {
+        "@noble/post-quantum": "^0.5.4",
+        "clsx": "^2.1.0",
+        "framer-motion": "^11.0.0",
+        "lucide-react": "^0.462.0",
+        "react": "^18.3.1",
+        "react-dom": "^18.3.1",
+        "sonner": "^1.7.0",
+        "tailwind-merge": "^2.6.0"
+    },
+    "devDependencies": {
+        "@crxjs/vite-plugin": "^2.0.0-beta.28",
+        "@types/chrome": "^0.0.284",
+        "@types/react": "^18.3.12",
+        "@types/react-dom": "^18.3.1",
+        "@vitejs/plugin-react": "^4.3.4",
+        "autoprefixer": "^10.4.20",
+        "postcss": "^8.4.49",
+        "tailwindcss": "^3.4.15",
+        "typescript": "^5.7.2",
+        "vite": "^6.0.0"
+    }
+}
