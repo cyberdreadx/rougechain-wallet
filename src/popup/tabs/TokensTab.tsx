@@ -154,9 +154,13 @@ export default function TokensTab({ wallet }: Props) {
                             {myTokens.map(b => (
                                 <div key={b.symbol} className="flex items-center justify-between py-2.5 px-3 rounded-lg hover:bg-secondary/30 transition-colors">
                                     <div className="flex items-center gap-2.5">
-                                        <div className="w-8 h-8 rounded-full bg-primary/10 flex items-center justify-center text-sm">
-                                            {b.icon}
-                                        </div>
+                                        {b.symbol === "XRGE" ? (
+                                            <img src="/icons/icon-128.png" alt="XRGE" className="w-8 h-8 rounded-full" />
+                                        ) : (
+                                            <div className="w-8 h-8 rounded-full bg-primary/10 flex items-center justify-center text-sm">
+                                                {b.icon}
+                                            </div>
+                                        )}
                                         <div>
                                             <p className="text-xs font-medium text-foreground">{b.symbol}</p>
                                             <p className="text-[10px] text-muted-foreground">{b.name}</p>

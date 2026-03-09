@@ -2,10 +2,10 @@ import { useState, useEffect, useRef } from "react";
 import {
     ArrowLeft, Send, Lock, Shield, Plus, Loader2,
     MessageCircle, CheckCircle2, XCircle, Timer,
-    Paperclip, EyeOff, Image as ImageIcon, Video, X, Trash2
+    Paperclip, EyeOff, Image as ImageIcon, Video, X, Trash2, KeyRound
 } from "lucide-react";
 import type { UnifiedWallet } from "../../lib/unified-wallet";
-import { toMessengerWallet } from "../../lib/unified-wallet";
+import { toMessengerWallet, saveUnifiedWallet } from "../../lib/unified-wallet";
 import {
     getConversations,
     getMessages,
@@ -43,6 +43,7 @@ export default function MessengerTab({ wallet }: Props) {
     const [isLoading, setIsLoading] = useState(true);
     const [regStatus, setRegStatus] = useState<"pending" | "ok" | "error">("pending");
     const [regError, setRegError] = useState<string | null>(null);
+    const [isRegeneratingKeys, setIsRegeneratingKeys] = useState(false);
 
     const messengerWallet = toMessengerWallet(wallet) as WalletWithPrivateKeys;
 
@@ -99,12 +100,61 @@ export default function MessengerTab({ wallet }: Props) {
                 <span className="text-xs font-medium text-muted-foreground uppercase tracking-wider">
                     Conversations
                 </span>
-                <button
-                    onClick={() => { setShowContacts(!showContacts); loadContacts(); }}
-                    className="w-7 h-7 rounded-lg bg-primary/20 flex items-center justify-center text-primary hover:bg-primary/30 transition-colors"
-                >
-                    <Plus className="w-3.5 h-3.5" />
-                </button>
+                <div className="flex items-center gap-1">
+                    <button
+                        onClick={async () => {
+                            if (isRegeneratingKeys) return;
+                            setIsRegeneratingKeys(true);
+                            try {
+                                const { ml_dsa65 } = await import("@noble/post-quantum/ml-dsa.js");
+                                const { ml_kem768 } = await import("@noble/post-quantum/ml-kem.js");
+                                const bytesToHex = (bytes: Uint8Array) =>
+                                    Array.from(bytes).map(b => b.toString(16).padStart(2, '0')).join('');
+                                const sigKeypair = ml_dsa65.keygen();
+                                const encKeypair = ml_kem768.keygen();
+                                const updated: UnifiedWallet = {
+                                    ...wallet,
+                                    signingPublicKey: bytesToHex(sigKeypair.publicKey),
+                                    signingPrivateKey: bytesToHex(sigKeypair.secretKey),
+                                    encryptionPublicKey: bytesToHex(encKeypair.publicKey),
+                                    encryptionPrivateKey: bytesToHex(encKeypair.secretKey),
+                                    version: 4,
+                                };
+                                // Write directly to chrome.storage.local and AWAIT it
+                                // saveUnifiedWallet is fire-and-forget, which loses data on reload
+                                const storageKey = "pqc-unified-wallet";
+                                await chrome.storage.local.set({ [storageKey]: JSON.stringify(updated) });
+                                // Also update the in-memory cache
+                                saveUnifiedWallet(updated);
+                                await registerWalletOnNode({
+                                    id: updated.id,
+                                    displayName: updated.displayName,
+                                    signingPublicKey: updated.signingPublicKey,
+                                    encryptionPublicKey: updated.encryptionPublicKey,
+                                });
+                                setRegStatus("ok");
+                                setRegError(null);
+                                // Now safe to reload since storage write completed
+                                window.location.reload();
+                            } catch (err: any) {
+                                setRegError(err.message || "Key regeneration failed");
+                                setRegStatus("error");
+                            } finally {
+                                setIsRegeneratingKeys(false);
+                            }
+                        }}
+                        className="w-7 h-7 rounded-lg bg-yellow-500/20 flex items-center justify-center text-yellow-400 hover:bg-yellow-500/30 transition-colors"
+                        title="Regenerate keys (fixes key mismatch errors)"
+                    >
+                        <KeyRound className={`w-3.5 h-3.5 ${isRegeneratingKeys ? "animate-spin" : ""}`} />
+                    </button>
+                    <button
+                        onClick={() => { setShowContacts(!showContacts); loadContacts(); }}
+                        className="w-7 h-7 rounded-lg bg-primary/20 flex items-center justify-center text-primary hover:bg-primary/30 transition-colors"
+                    >
+                        <Plus className="w-3.5 h-3.5" />
+                    </button>
+                </div>
             </div>
 
             {/* Registration status */}
@@ -173,7 +223,10 @@ export default function MessengerTab({ wallet }: Props) {
                     </div>
                 ) : (
                     conversations.map(convo => {
-                        const other = convo.participants?.find(p => p.id !== wallet.id);
+                        const myIds = new Set([wallet.id, wallet.signingPublicKey, wallet.encryptionPublicKey].filter(Boolean));
+                        const other = convo.participants?.find(p =>
+                            !myIds.has(p.id) && !myIds.has(p.signingPublicKey) && !myIds.has(p.encryptionPublicKey)
+                        );
                         return (
                             <div
                                 key={convo.id}
@@ -239,12 +292,15 @@ function ChatView({
     const messagesEndRef = useRef<HTMLDivElement>(null);
     const prevCountRef = useRef(0);
 
-    const participantRecipient = conversation.participants?.find(p => p.id !== wallet.id);
+    const myIds = new Set([wallet.id, wallet.signingPublicKey, wallet.encryptionPublicKey].filter(Boolean));
+    const participantRecipient = conversation.participants?.find(p =>
+        !myIds.has(p.id) && !myIds.has(p.signingPublicKey) && !myIds.has(p.encryptionPublicKey)
+    );
     const recipient = participantRecipient || resolvedRecipient;
 
     useEffect(() => {
         if (!participantRecipient && conversation.participantIds) {
-            const otherId = conversation.participantIds.find(id => id !== wallet.id);
+            const otherId = conversation.participantIds.find(id => !myIds.has(id));
             if (otherId) {
                 getWallets().then(wallets => {
                     const match = wallets.find(w => w.id === otherId);
