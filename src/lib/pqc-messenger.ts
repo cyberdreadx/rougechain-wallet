@@ -700,7 +700,15 @@ export async function getMessages(
                 spoiler: raw.spoiler ?? false,
             });
         }
-        return messages;
+        // Filter out expired self-destruct messages client-side
+        const now = Date.now();
+        return messages.filter(m => {
+            if (!m.selfDestruct || !m.readAt) return true;
+            const readTime = new Date(m.readAt).getTime();
+            if (isNaN(readTime)) return true;
+            const ttl = (m.destructAfterSeconds ?? 30) * 1000;
+            return now < readTime + ttl;
+        });
     } catch { return []; }
 }
 
