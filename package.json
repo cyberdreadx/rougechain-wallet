@@ -1,6 +1,6 @@
 {
     "name": "rougechain-wallet",
-    "version": "1.0.0",
+    "version": "1.0.1",
     "description": "Quantum-safe cryptocurrency wallet & encrypted messenger browser extension for RougeChain",
     "type": "module",
     "license": "MIT",
@@ -31,7 +31,8 @@
     "scripts": {
         "dev": "vite",
         "build": "vite build",
-        "preview": "vite preview"
+        "preview": "vite preview",
+        "zip": "vite build && cd dist && tar -a -cf ../rougechain-wallet.zip *"
     },
     "dependencies": {
         "@noble/post-quantum": "^0.5.4",

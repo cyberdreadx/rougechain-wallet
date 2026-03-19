@@ -1,0 +1,151 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>RougeChain Wallet Test</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body { font-family: 'Segoe UI', system-ui, sans-serif; background: #0a0a0f; color: #e0e0e0; min-height: 100vh; padding: 40px; }
+    h1 { color: #ff3366; margin-bottom: 8px; font-size: 28px; }
+    .subtitle { color: #888; margin-bottom: 32px; }
+    .card { background: #141420; border: 1px solid #2a2a3a; border-radius: 12px; padding: 24px; margin-bottom: 16px; }
+    .card h2 { color: #ff3366; font-size: 16px; margin-bottom: 12px; }
+    .status { display: flex; align-items: center; gap: 8px; font-size: 14px; padding: 8px 0; }
+    .dot { width: 10px; height: 10px; border-radius: 50%; }
+    .dot.green { background: #00ff88; box-shadow: 0 0 8px #00ff88; }
+    .dot.red { background: #ff4444; box-shadow: 0 0 8px #ff4444; }
+    .dot.yellow { background: #ffaa00; box-shadow: 0 0 8px #ffaa00; }
+    button { background: #ff3366; color: white; border: none; padding: 10px 20px; border-radius: 8px; cursor: pointer; font-size: 14px; font-weight: 600; margin: 4px; transition: all 0.2s; }
+    button:hover { background: #ff4477; transform: translateY(-1px); }
+    button:disabled { opacity: 0.5; cursor: not-allowed; transform: none; }
+    pre { background: #0d0d15; border: 1px solid #2a2a3a; border-radius: 8px; padding: 12px; font-size: 12px; overflow-x: auto; margin-top: 8px; color: #b0b0c0; max-height: 300px; overflow-y: auto; white-space: pre-wrap; word-break: break-all; }
+    .actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 12px; }
+  </style>
+</head>
+<body>
+  <h1>🔴 RougeChain Wallet Test</h1>
+  <p class="subtitle">Extension integration test page — uses actual provider API</p>
+
+  <div class="card">
+    <h2>1. Provider Detection</h2>
+    <div class="status" id="provider-status">
+      <div class="dot yellow"></div>
+      <span>Checking for window.rougechain...</span>
+    </div>
+    <div class="status" id="provider-details" style="display:none"></div>
+  </div>
+
+  <div class="card">
+    <h2>2. Wallet Actions</h2>
+    <div class="actions">
+      <button id="btn-connect" onclick="doConnect()" disabled>Connect</button>
+      <button id="btn-balance" onclick="doBalance()" disabled>Get Balance</button>
+      <button id="btn-sign" onclick="doSign()" disabled>Sign Tx</button>
+      <button id="btn-send" onclick="doSend()" disabled>Send Tx</button>
+    </div>
+  </div>
+
+  <div class="card">
+    <h2>3. Log</h2>
+    <pre id="output">Waiting for provider detection...</pre>
+  </div>
+
+  <script>
+    const output = document.getElementById('output');
+    let connected = false;
+
+    function log(msg) {
+      const ts = new Date().toLocaleTimeString();
+      output.textContent = `[${ts}] ${msg}\n` + output.textContent;
+    }
+
+    function setStatus(id, color, text) {
+      const el = document.getElementById(id);
+      el.innerHTML = `<div class="dot ${color}"></div><span>${text}</span>`;
+      el.style.display = 'flex';
+    }
+
+    function checkProvider() {
+      if (window.rougechain) {
+        const methods = Object.keys(window.rougechain).filter(k => typeof window.rougechain[k] === 'function');
+        setStatus('provider-status', 'green', 'window.rougechain detected ✓');
+        setStatus('provider-details', 'green', 'Methods: ' + methods.join(', '));
+        document.getElementById('provider-details').style.display = 'flex';
+        log('Provider found! Methods: ' + JSON.stringify(methods));
+        document.getElementById('btn-connect').disabled = false;
+        return true;
+      }
+      return false;
+    }
+
+    if (!checkProvider()) {
+      let attempts = 0;
+      const interval = setInterval(() => {
+        attempts++;
+        if (checkProvider()) {
+          clearInterval(interval);
+        } else if (attempts >= 20) {
+          clearInterval(interval);
+          setStatus('provider-status', 'red', 'window.rougechain NOT found after 10s');
+          log('ERROR: No provider detected. Is the extension installed?');
+        }
+      }, 500);
+    }
+
+    async function doConnect() {
+      log('Calling window.rougechain.connect()...');
+      try {
+        const result = await window.rougechain.connect();
+        connected = true;
+        log('✅ Connected: ' + JSON.stringify(result));
+        document.getElementById('btn-balance').disabled = false;
+        document.getElementById('btn-sign').disabled = false;
+        document.getElementById('btn-send').disabled = false;
+      } catch (err) {
+        log('❌ Connect error: ' + (err.message || err));
+      }
+    }
+
+    async function doBalance() {
+      log('Calling window.rougechain.getBalance()...');
+      try {
+        const result = await window.rougechain.getBalance();
+        log('✅ Balance: ' + JSON.stringify(result));
+      } catch (err) {
+        log('❌ Balance error: ' + (err.message || err));
+      }
+    }
+
+    async function doSign() {
+      log('Calling window.rougechain.signTransaction({type:"transfer",to:"test",amount:1})...');
+      try {
+        const result = await window.rougechain.signTransaction({
+          type: 'transfer',
+          to: 'test_recipient_address',
+          amount: 1,
+          token: 'XRGE'
+        });
+        log('✅ Signed: ' + JSON.stringify(result).slice(0, 200) + '...');
+      } catch (err) {
+        log('❌ Sign error: ' + (err.message || err));
+      }
+    }
+
+    async function doSend() {
+      log('Calling window.rougechain.sendTransaction({type:"transfer",to:"test",amount:0.1})...');
+      try {
+        const result = await window.rougechain.sendTransaction({
+          type: 'transfer',
+          to: 'test_recipient_address',
+          amount: 0.1,
+          token: 'XRGE'
+        });
+        log('✅ Sent: ' + JSON.stringify(result));
+      } catch (err) {
+        log('❌ Send error: ' + (err.message || err));
+      }
+    }
+  </script>
+</body>
+</html>

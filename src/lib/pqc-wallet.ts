@@ -358,3 +358,128 @@ export async function claimFaucet(publicKey: string): Promise<any> {
     invalidate("blocks");
     return res.json();
 }
+
+// ===== Shielded Transaction Types & Functions =====
+
+export interface ShieldedNote {
+    commitment: string;
+    nullifier: string;
+    value: number;
+    randomness: string;
+    ownerPubKey: string;
+}
+
+export interface ShieldedStats {
+    success: boolean;
+    commitment_count: number;
+    nullifier_count: number;
+    active_notes: number;
+}
+
+export interface StoredNote extends ShieldedNote {
+    createdAt: number;
+    spent: boolean;
+    spentAt?: number;
+}
+
+// --- Crypto helpers (Web Crypto API, no external deps) ---
+
+const COMMITMENT_DOMAIN = new TextEncoder().encode("ROUGECHAIN_COMMITMENT_V1");
+const NULLIFIER_DOMAIN  = new TextEncoder().encode("ROUGECHAIN_NULLIFIER_V1");
+const NOTE_STORE_KEY = "pqc-shielded-notes";
+
+function hexToU8(hex: string): Uint8Array {
+    const clean = hex.startsWith("0x") ? hex.slice(2) : hex;
+    const bytes = new Uint8Array(clean.length / 2);
+    for (let i = 0; i < bytes.length; i++) bytes[i] = parseInt(clean.slice(i * 2, i * 2 + 2), 16);
+    return bytes;
+}
+
+function u8ToHex(bytes: Uint8Array): string {
+    return Array.from(bytes).map(b => b.toString(16).padStart(2, "0")).join("");
+}
+
+function u64ToBytes(value: number): Uint8Array {
+    const buf = new Uint8Array(8);
+    const view = new DataView(buf.buffer);
+    view.setBigUint64(0, BigInt(value), false);
+    return buf;
+}
+
+function concat(...arrs: Uint8Array[]): Uint8Array {
+    const total = arrs.reduce((s, a) => s + a.length, 0);
+    const result = new Uint8Array(total);
+    let offset = 0;
+    for (const a of arrs) { result.set(a, offset); offset += a.length; }
+    return result;
+}
+
+async function sha256(data: Uint8Array): Promise<Uint8Array> {
+    const hash = await crypto.subtle.digest("SHA-256", data.buffer as ArrayBuffer);
+    return new Uint8Array(hash);
+}
+
+export async function createShieldedNote(value: number, ownerPubKey: string): Promise<ShieldedNote> {
+    const randBytes = new Uint8Array(32);
+    crypto.getRandomValues(randBytes);
+    const randomness = u8ToHex(randBytes);
+
+    const commitInput = concat(COMMITMENT_DOMAIN, u64ToBytes(value), hexToU8(ownerPubKey), randBytes);
+    const commitment = u8ToHex(await sha256(commitInput));
+
+    const nullInput = concat(NULLIFIER_DOMAIN, randBytes, hexToU8(commitment));
+    const nullifier = u8ToHex(await sha256(nullInput));
+
+    return { commitment, nullifier, value, randomness, ownerPubKey };
+}
+
+// --- Shielded stats API ---
+
+export async function getShieldedStats(): Promise<ShieldedStats> {
+    const baseUrl = getCoreApiBaseUrl();
+    if (!baseUrl) return { success: false, commitment_count: 0, nullifier_count: 0, active_notes: 0 };
+    try {
+        const res = await fetch(`${baseUrl}/shielded/stats`, { headers: getCoreApiHeaders() });
+        return await res.json();
+    } catch {
+        return { success: false, commitment_count: 0, nullifier_count: 0, active_notes: 0 };
+    }
+}
+
+// --- Note store (localStorage) ---
+
+function loadNotes(): StoredNote[] {
+    try {
+        const raw = localStorage.getItem(NOTE_STORE_KEY);
+        return raw ? JSON.parse(raw) : [];
+    } catch { return []; }
+}
+
+function persistNotes(notes: StoredNote[]): void {
+    localStorage.setItem(NOTE_STORE_KEY, JSON.stringify(notes));
+}
+
+export function saveNote(note: ShieldedNote): void {
+    const notes = loadNotes();
+    if (notes.some(n => n.commitment === note.commitment)) return;
+    notes.push({ ...note, createdAt: Date.now(), spent: false });
+    persistNotes(notes);
+}
+
+export function getActiveNotes(ownerPubKey: string): StoredNote[] {
+    return loadNotes().filter(n => n.ownerPubKey === ownerPubKey && !n.spent);
+}
+
+export function getShieldedBalance(ownerPubKey: string): number {
+    return getActiveNotes(ownerPubKey).reduce((sum, n) => sum + n.value, 0);
+}
+
+export function markNoteSpent(nullifier: string): void {
+    const notes = loadNotes();
+    const note = notes.find(n => n.nullifier === nullifier);
+    if (note) {
+        note.spent = true;
+        note.spentAt = Date.now();
+        persistNotes(notes);
+    }
+}
