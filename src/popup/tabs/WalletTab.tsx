@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback } from "react";
-import { RefreshCw, Send, Download, Droplets, Copy, Check, TrendingUp, ArrowDownUp, Shield, ShieldOff, AlertCircle, X } from "lucide-react";
+import { RefreshCw, Send, Download, Droplets, Copy, Check, TrendingUp, ArrowDownUp, Shield, ShieldOff, AlertCircle, X, ExternalLink } from "lucide-react";
 import type { UnifiedWallet } from "../../lib/unified-wallet";
 import {
     getWalletBalance,
@@ -67,6 +67,7 @@ export default function WalletTab({ wallet }: Props) {
     const [savedNotes, setSavedNotes] = useState<StoredNote[]>([]);
     const [unshieldingNote, setUnshieldingNote] = useState<string | null>(null);
     const [toast, setToast] = useState<{ message: string; type: "error" | "success" } | null>(null);
+    const [selectedTxId, setSelectedTxId] = useState<string | null>(null);
 
     const showToast = (message: string, type: "error" | "success" = "error") => {
         setToast({ message, type });
@@ -492,31 +493,83 @@ export default function WalletTab({ wallet }: Props) {
                     ) : (
                         <div className="space-y-1">
                             {transactions.map(tx => (
-                                <div
-                                    key={tx.id}
-                                    className="flex items-center justify-between py-2 px-2 rounded-lg hover:bg-secondary/30 card-hover transition-all cursor-default"
-                                >
-                                    <div className="flex items-center gap-2 min-w-0">
-                                        <div className={`w-6 h-6 rounded-full flex items-center justify-center text-[10px] ${tx.type === "receive"
-                                            ? "bg-success/20 text-success"
-                                            : "bg-destructive/20 text-destructive"
-                                            }`}>
-                                            {tx.type === "receive" ? <TrendingUp className="w-3 h-3" /> : <Send className="w-3 h-3" />}
+                                <div key={tx.id}>
+                                    <div
+                                        onClick={() => setSelectedTxId(selectedTxId === tx.id ? null : tx.id)}
+                                        className={`flex items-center justify-between py-2 px-2 rounded-lg hover:bg-secondary/30 card-hover transition-all cursor-pointer ${selectedTxId === tx.id ? 'bg-secondary/40' : ''}`}
+                                    >
+                                        <div className="flex items-center gap-2 min-w-0">
+                                            <div className={`w-6 h-6 rounded-full flex items-center justify-center text-[10px] ${tx.type === "receive"
+                                                ? "bg-success/20 text-success"
+                                                : "bg-destructive/20 text-destructive"
+                                                }`}>
+                                                {tx.type === "receive" ? <TrendingUp className="w-3 h-3" /> : <Send className="w-3 h-3" />}
+                                            </div>
+                                            <div className="min-w-0">
+                                                <p className="text-xs text-foreground capitalize">{tx.type}</p>
+                                                <p className="text-[10px] text-muted-foreground font-mono truncate">
+                                                    {truncateAddress(tx.address || "")}
+                                                </p>
+                                            </div>
                                         </div>
-                                        <div className="min-w-0">
-                                            <p className="text-xs text-foreground capitalize">{tx.type}</p>
-                                            <p className="text-[10px] text-muted-foreground font-mono truncate">
-                                                {truncateAddress(tx.address || "")}
+                                        <div className="text-right flex-shrink-0">
+                                            <p className={`text-xs font-mono ${tx.type === "receive" ? "text-success" : "text-foreground"
+                                                }`}>
+                                                {tx.type === "receive" ? "+" : "-"}{tx.amount} {tx.symbol}
                                             </p>
+                                            <p className="text-[10px] text-muted-foreground">{tx.timeLabel}</p>
                                         </div>
                                     </div>
-                                    <div className="text-right flex-shrink-0">
-                                        <p className={`text-xs font-mono ${tx.type === "receive" ? "text-success" : "text-foreground"
-                                            }`}>
-                                            {tx.type === "receive" ? "+" : "-"}{tx.amount} {tx.symbol}
-                                        </p>
-                                        <p className="text-[10px] text-muted-foreground">{tx.timeLabel}</p>
-                                    </div>
+                                    {/* Expanded detail panel */}
+                                    {selectedTxId === tx.id && (
+                                        <div className="mx-2 mb-1 p-2.5 rounded-lg bg-muted/50 border border-border space-y-1.5 animate-in slide-in-from-top-1">
+                                            {tx.from && (
+                                                <div className="flex justify-between items-center">
+                                                    <span className="text-[10px] text-muted-foreground">From</span>
+                                                    <span className="text-[10px] font-mono text-foreground truncate max-w-[180px]">{truncateAddress(tx.from)}</span>
+                                                </div>
+                                            )}
+                                            {tx.to && (
+                                                <div className="flex justify-between items-center">
+                                                    <span className="text-[10px] text-muted-foreground">To</span>
+                                                    <span className="text-[10px] font-mono text-foreground truncate max-w-[180px]">{truncateAddress(tx.to)}</span>
+                                                </div>
+                                            )}
+                                            {tx.fee !== undefined && (
+                                                <div className="flex justify-between">
+                                                    <span className="text-[10px] text-muted-foreground">Fee</span>
+                                                    <span className="text-[10px] text-foreground">{tx.fee} {TOKEN_SYMBOL}</span>
+                                                </div>
+                                            )}
+                                            {tx.memo && (
+                                                <div className="flex justify-between">
+                                                    <span className="text-[10px] text-muted-foreground">Memo</span>
+                                                    <span className="text-[10px] text-foreground truncate max-w-[180px]">{tx.memo}</span>
+                                                </div>
+                                            )}
+                                            {tx.blockIndex !== undefined && (
+                                                <div className="flex justify-between">
+                                                    <span className="text-[10px] text-muted-foreground">Block</span>
+                                                    <span className="text-[10px] text-foreground">#{tx.blockIndex}</span>
+                                                </div>
+                                            )}
+                                            {tx.txHash && (
+                                                <div className="flex justify-between items-center">
+                                                    <span className="text-[10px] text-muted-foreground">Tx Hash</span>
+                                                    <span className="text-[10px] font-mono text-foreground truncate max-w-[150px]">{truncateAddress(tx.txHash)}</span>
+                                                </div>
+                                            )}
+                                            <a
+                                                href="https://rougechain.io/blockchain"
+                                                target="_blank"
+                                                rel="noopener noreferrer"
+                                                className="flex items-center justify-center gap-1.5 w-full mt-1 py-1.5 rounded-md bg-primary/10 text-primary text-[10px] font-medium hover:bg-primary/20 transition-colors"
+                                            >
+                                                <ExternalLink className="w-3 h-3" />
+                                                View on Explorer
+                                            </a>
+                                        </div>
+                                    )}
                                 </div>
                             ))}
                         </div>

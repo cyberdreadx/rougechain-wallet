@@ -1,5 +1,5 @@
 import { useState, useEffect } from "react";
-import { Wallet, Coins, Image, MessageCircle, Mail, Settings, Lock } from "lucide-react";
+import { Wallet, Coins, Image, MessageCircle, Mail, Settings, Lock, MoreVertical, ExternalLink, Copy, Check } from "lucide-react";
 import { initStorage } from "../lib/storage";
 import {
     loadUnifiedWallet,
@@ -25,6 +25,8 @@ export default function App() {
     const [activeTab, setActiveTab] = useState<Tab>("wallet");
     const [wallet, setWallet] = useState<UnifiedWallet | null>(null);
     const [locked, setLocked] = useState(false);
+    const [showMenu, setShowMenu] = useState(false);
+    const [copied, setCopied] = useState(false);
 
     useEffect(() => {
         (async () => {
@@ -93,11 +95,77 @@ export default function App() {
                     </div>
                     <span className="text-sm font-bold text-gradient-quantum tracking-tight">RougeChain</span>
                 </div>
-                <div className="flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-success/10 border border-success/20">
-                    <div className="w-1.5 h-1.5 rounded-full bg-success animate-pulse shadow-sm shadow-success/50" />
-                    <span className="text-[10px] text-success font-semibold">
-                        {getCoreApiBaseUrl().includes("testnet") ? "Testnet" : getCoreApiBaseUrl().includes("localhost") ? "Devnet" : "Mainnet"}
-                    </span>
+                <div className="flex items-center gap-1.5">
+                    <div className="flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-success/10 border border-success/20">
+                        <div className="w-1.5 h-1.5 rounded-full bg-success animate-pulse shadow-sm shadow-success/50" />
+                        <span className="text-[10px] text-success font-semibold">
+                            {getCoreApiBaseUrl().includes("testnet") ? "Testnet" : getCoreApiBaseUrl().includes("localhost") ? "Devnet" : "Mainnet"}
+                        </span>
+                    </div>
+                    {wallet && (
+                        <div className="relative">
+                            <button
+                                onClick={() => setShowMenu(!showMenu)}
+                                className="p-1.5 rounded-lg hover:bg-secondary/50 transition-colors text-muted-foreground hover:text-foreground"
+                            >
+                                <MoreVertical className="w-4 h-4" />
+                            </button>
+                            {showMenu && (
+                                <>
+                                    <div className="fixed inset-0 z-40" onClick={() => setShowMenu(false)} />
+                                    <div className="absolute right-0 top-full mt-1 w-48 py-1 rounded-lg bg-card border border-border shadow-xl z-50 animate-in slide-in-from-top-1">
+                                        <a
+                                            href="https://rougechain.io/blockchain"
+                                            target="_blank"
+                                            rel="noopener noreferrer"
+                                            className="flex items-center gap-2 px-3 py-2 text-xs text-foreground hover:bg-secondary/50 transition-colors"
+                                            onClick={() => setShowMenu(false)}
+                                        >
+                                            <ExternalLink className="w-3.5 h-3.5" />
+                                            View on Explorer
+                                        </a>
+                                        <button
+                                            onClick={() => {
+                                                navigator.clipboard.writeText(wallet.signingPublicKey);
+                                                setCopied(true);
+                                                setTimeout(() => { setCopied(false); setShowMenu(false); }, 1200);
+                                            }}
+                                            className="flex items-center gap-2 px-3 py-2 text-xs text-foreground hover:bg-secondary/50 transition-colors w-full text-left"
+                                        >
+                                            {copied ? <Check className="w-3.5 h-3.5 text-success" /> : <Copy className="w-3.5 h-3.5" />}
+                                            {copied ? "Copied!" : "Copy Address"}
+                                        </button>
+                                        <div className="border-t border-border my-1" />
+                                        <button
+                                            onClick={() => { setActiveTab("settings"); setShowMenu(false); }}
+                                            className="flex items-center gap-2 px-3 py-2 text-xs text-foreground hover:bg-secondary/50 transition-colors w-full text-left"
+                                        >
+                                            <Settings className="w-3.5 h-3.5" />
+                                            Settings
+                                        </button>
+                                        <button
+                                            onClick={() => { setLocked(true); setWallet(null); setShowMenu(false); }}
+                                            className="flex items-center gap-2 px-3 py-2 text-xs text-warning hover:bg-secondary/50 transition-colors w-full text-left"
+                                        >
+                                            <Lock className="w-3.5 h-3.5" />
+                                            Lock Wallet
+                                        </button>
+                                        <div className="border-t border-border my-1" />
+                                        <a
+                                            href="https://rougechain.io"
+                                            target="_blank"
+                                            rel="noopener noreferrer"
+                                            className="flex items-center gap-2 px-3 py-2 text-xs text-muted-foreground hover:bg-secondary/50 transition-colors"
+                                            onClick={() => setShowMenu(false)}
+                                        >
+                                            <ExternalLink className="w-3.5 h-3.5" />
+                                            Open Full Web App
+                                        </a>
+                                    </div>
+                                </>
+                            )}
+                        </div>
+                    )}
                 </div>
             </div>
 
