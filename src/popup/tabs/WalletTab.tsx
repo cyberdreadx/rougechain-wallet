@@ -20,6 +20,7 @@ import {
     type ShieldedNote,
     type StoredNote,
 } from "../../lib/pqc-wallet";
+import { pubkeyToAddress, formatAddress } from "../../lib/address";
 
 interface Props {
     wallet: UnifiedWallet;
@@ -68,6 +69,12 @@ export default function WalletTab({ wallet }: Props) {
     const [unshieldingNote, setUnshieldingNote] = useState<string | null>(null);
     const [toast, setToast] = useState<{ message: string; type: "error" | "success" } | null>(null);
     const [selectedTxId, setSelectedTxId] = useState<string | null>(null);
+    const [walletAddress, setWalletAddress] = useState<string | null>(null);
+
+    // Derive rouge1 address
+    useEffect(() => {
+        pubkeyToAddress(wallet.signingPublicKey).then(setWalletAddress).catch(() => {});
+    }, [wallet.signingPublicKey]);
 
     const showToast = (message: string, type: "error" | "success" = "error") => {
         setToast({ message, type });
@@ -104,7 +111,8 @@ export default function WalletTab({ wallet }: Props) {
     const xrgeBalance = balances.find(b => b.symbol === TOKEN_SYMBOL)?.balance || 0;
 
     const copyAddress = () => {
-        navigator.clipboard.writeText(wallet.signingPublicKey);
+        const textToCopy = walletAddress || wallet.signingPublicKey;
+        navigator.clipboard.writeText(textToCopy);
         setCopied(true);
         setTimeout(() => setCopied(false), 2000);
     };
@@ -189,7 +197,7 @@ export default function WalletTab({ wallet }: Props) {
                             onClick={copyAddress}
                             className="flex items-center gap-1 text-[10px] text-muted-foreground font-mono hover:text-foreground transition-colors mt-0.5"
                         >
-                            {truncateAddress(wallet.signingPublicKey)}
+                            {walletAddress ? formatAddress(walletAddress) : truncateAddress(wallet.signingPublicKey)}
                             {copied ? <Check className="w-2.5 h-2.5 text-success" /> : <Copy className="w-2.5 h-2.5" />}
                         </button>
                     </div>
