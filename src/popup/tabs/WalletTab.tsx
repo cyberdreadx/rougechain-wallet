@@ -20,7 +20,7 @@ import {
     type ShieldedNote,
     type StoredNote,
 } from "../../lib/pqc-wallet";
-import { pubkeyToAddress, formatAddress } from "../../lib/address";
+import { pubkeyToAddress, formatAddress, formatIdentity } from "../../lib/address";
 
 interface Props {
     wallet: UnifiedWallet;
@@ -516,7 +516,7 @@ export default function WalletTab({ wallet }: Props) {
                                             <div className="min-w-0">
                                                 <p className="text-xs text-foreground capitalize">{tx.type}</p>
                                                 <p className="text-[10px] text-muted-foreground font-mono truncate">
-                                                    {truncateAddress(tx.address || "")}
+                                                    {formatIdentity(tx.address || "")}
                                                 </p>
                                             </div>
                                         </div>
@@ -534,13 +534,13 @@ export default function WalletTab({ wallet }: Props) {
                                             {tx.from && (
                                                 <div className="flex justify-between items-center">
                                                     <span className="text-[10px] text-muted-foreground">From</span>
-                                                    <span className="text-[10px] font-mono text-foreground truncate max-w-[180px]">{truncateAddress(tx.from)}</span>
+                                                    <span className="text-[10px] font-mono text-foreground truncate max-w-[180px]">{formatIdentity(tx.from)}</span>
                                                 </div>
                                             )}
                                             {tx.to && (
                                                 <div className="flex justify-between items-center">
                                                     <span className="text-[10px] text-muted-foreground">To</span>
-                                                    <span className="text-[10px] font-mono text-foreground truncate max-w-[180px]">{truncateAddress(tx.to)}</span>
+                                                    <span className="text-[10px] font-mono text-foreground truncate max-w-[180px]">{formatIdentity(tx.to)}</span>
                                                 </div>
                                             )}
                                             {tx.fee !== undefined && (

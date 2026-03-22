@@ -18,6 +18,8 @@ import UnlockScreen from "./components/UnlockScreen";
 import CreateWalletScreen from "./components/CreateWalletScreen";
 import { getCoreApiBaseUrl } from "../lib/network";
 
+import { pubkeyToAddress } from "../lib/address";
+
 type Tab = "wallet" | "tokens" | "nfts" | "messenger" | "mail" | "settings";
 
 export default function App() {
@@ -27,6 +29,7 @@ export default function App() {
     const [locked, setLocked] = useState(false);
     const [showMenu, setShowMenu] = useState(false);
     const [copied, setCopied] = useState(false);
+    const [rougeAddress, setRougeAddress] = useState("");
 
     useEffect(() => {
         (async () => {
@@ -38,6 +41,14 @@ export default function App() {
             setReady(true);
         })();
     }, []);
+
+    // Compute rouge1 address when wallet changes
+    useEffect(() => {
+        if (wallet?.signingPublicKey) {
+            pubkeyToAddress(wallet.signingPublicKey).then(setRougeAddress).catch(() => {});
+        }
+    }, [wallet?.signingPublicKey]);
+
 
     if (!ready) {
         return (
@@ -126,7 +137,7 @@ export default function App() {
                                         </a>
                                         <button
                                             onClick={() => {
-                                                navigator.clipboard.writeText(wallet.signingPublicKey);
+                                                navigator.clipboard.writeText(rougeAddress || wallet.signingPublicKey);
                                                 setCopied(true);
                                                 setTimeout(() => { setCopied(false); setShowMenu(false); }, 1200);
                                             }}

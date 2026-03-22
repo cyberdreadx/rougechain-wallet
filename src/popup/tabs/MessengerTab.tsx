@@ -26,6 +26,7 @@ import {
     type Wallet,
     type WalletWithPrivateKeys,
 } from "../../lib/pqc-messenger";
+import { formatIdentity } from "../../lib/address";
 
 interface Props {
     wallet: UnifiedWallet;
@@ -212,7 +213,7 @@ export default function MessengerTab({ wallet }: Props) {
                                 <div className="min-w-0">
                                     <p className="text-xs font-medium text-foreground truncate">{c.displayName}</p>
                                     <p className="text-[10px] text-muted-foreground font-mono truncate">
-                                        {c.signingPublicKey.substring(0, 16)}...
+                                        {formatIdentity(c.signingPublicKey)}
                                     </p>
                                 </div>
                             </button>
