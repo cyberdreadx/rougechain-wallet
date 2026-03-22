@@ -1,8 +1,8 @@
 import { useState } from "react";
-import { Loader2, Plus, Upload } from "lucide-react";
-import { generateKeypair } from "../../lib/pqc-blockchain";
+import { Loader2, Plus, Upload, KeyRound } from "lucide-react";
 import { generateEncryptionKeypair, registerWalletOnNode } from "../../lib/pqc-messenger";
 import { saveUnifiedWallet, type UnifiedWallet } from "../../lib/unified-wallet";
+import { generateMnemonic, keypairFromMnemonic } from "../../lib/mnemonic";
 
 interface Props {
     onCreated: (wallet: UnifiedWallet) => void;
@@ -18,7 +18,9 @@ export default function CreateWalletScreen({ onCreated }: Props) {
         setIsCreating(true);
 
         try {
-            const { keypair } = await generateKeypair();
+            // Generate BIP-39 mnemonic and derive ML-DSA-65 keys
+            const mnemonic = generateMnemonic();
+            const { publicKey, secretKey } = keypairFromMnemonic(mnemonic);
             const encKeypair = generateEncryptionKeypair();
             const id = crypto.randomUUID();
 
@@ -26,11 +28,12 @@ export default function CreateWalletScreen({ onCreated }: Props) {
                 id,
                 displayName: name.trim(),
                 createdAt: Date.now(),
-                signingPublicKey: keypair.publicKey,
-                signingPrivateKey: keypair.privateKey,
+                signingPublicKey: publicKey,
+                signingPrivateKey: secretKey,
                 encryptionPublicKey: encKeypair.publicKey,
                 encryptionPrivateKey: encKeypair.privateKey,
                 version: 3,
+                mnemonic,
             };
 
             saveUnifiedWallet(wallet);
@@ -70,6 +73,49 @@ export default function CreateWalletScreen({ onCreated }: Props) {
         }
     };
 
+    const [showSeedImport, setShowSeedImport] = useState(false);
+    const [seedPhrase, setSeedPhrase] = useState("");
+    const [seedError, setSeedError] = useState("");
+    const [isRecovering, setIsRecovering] = useState(false);
+
+    const handleSeedRecover = async () => {
+        const trimmed = seedPhrase.trim().toLowerCase();
+        const words = trimmed.split(/\s+/);
+        if (words.length !== 12 && words.length !== 24) {
+            setSeedError("Seed phrase must be 12 or 24 words");
+            return;
+        }
+        const { validateMnemonic: validate, keypairFromMnemonic: recover } = await import("../../lib/mnemonic");
+        if (!validate(trimmed)) {
+            setSeedError("Invalid seed phrase — check for typos");
+            return;
+        }
+        setSeedError("");
+        setIsRecovering(true);
+        try {
+            const { publicKey, secretKey } = recover(trimmed);
+            const { generateEncryptionKeypair } = await import("../../lib/pqc-messenger");
+            const encKeypair = generateEncryptionKeypair();
+            const wallet: UnifiedWallet = {
+                id: crypto.randomUUID(),
+                displayName: name.trim() || "Recovered Wallet",
+                createdAt: Date.now(),
+                signingPublicKey: publicKey,
+                signingPrivateKey: secretKey,
+                encryptionPublicKey: encKeypair.publicKey,
+                encryptionPrivateKey: encKeypair.privateKey,
+                version: 3,
+                mnemonic: trimmed,
+            };
+            saveUnifiedWallet(wallet);
+            onCreated(wallet);
+        } catch (err) {
+            console.error("Recovery failed:", err);
+            setSeedError("Recovery failed — please try again");
+        }
+        setIsRecovering(false);
+    };
+
     return (
         <div className="flex flex-col items-center justify-center h-full p-6 bg-background">
             <div className="logo-ring w-16 h-16 mb-4">
@@ -106,14 +152,55 @@ export default function CreateWalletScreen({ onCreated }: Props) {
 
                 <div className="relative flex items-center gap-2 py-2">
                     <div className="flex-1 h-px bg-border" />
-                    <span className="text-[10px] text-muted-foreground">or</span>
+                    <span className="text-[10px] text-muted-foreground">or recover</span>
                     <div className="flex-1 h-px bg-border" />
                 </div>
 
-                <label className="w-full py-2.5 rounded-xl bg-secondary text-secondary-foreground text-sm font-medium hover:bg-secondary/80 transition-colors flex items-center justify-center gap-2 cursor-pointer">
-                    <Upload className="w-4 h-4" /> Import Wallet
-                    <input type="file" accept=".json" onChange={handleImport} className="hidden" />
-                </label>
+                {/* Seed phrase recovery */}
+                {showSeedImport ? (
+                    <div className="space-y-2">
+                        <textarea
+                            placeholder="Enter your 24-word recovery phrase..."
+                            value={seedPhrase}
+                            onChange={e => { setSeedPhrase(e.target.value); setSeedError(""); }}
+                            rows={3}
+                            className="w-full px-3 py-2 rounded-xl bg-input border border-border text-xs text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-primary/50 resize-none font-mono"
+                        />
+                        {seedError && (
+                            <p className="text-[10px] text-destructive">{seedError}</p>
+                        )}
+                        <button
+                            onClick={handleSeedRecover}
+                            disabled={!seedPhrase.trim() || isRecovering}
+                            className="w-full py-2 rounded-xl bg-warning/20 text-warning text-sm font-medium hover:bg-warning/30 disabled:opacity-50 transition-colors flex items-center justify-center gap-2"
+                        >
+                            {isRecovering ? (
+                                <><Loader2 className="w-4 h-4 animate-spin" /> Recovering...</>
+                            ) : (
+                                "Recover Wallet"
+                            )}
+                        </button>
+                        <button
+                            onClick={() => { setShowSeedImport(false); setSeedError(""); setSeedPhrase(""); }}
+                            className="w-full py-1.5 text-[10px] text-muted-foreground hover:text-foreground transition-colors"
+                        >
+                            Cancel
+                        </button>
+                    </div>
+                ) : (
+                    <div className="space-y-2">
+                        <button
+                            onClick={() => setShowSeedImport(true)}
+                            className="w-full py-2.5 rounded-xl bg-secondary text-secondary-foreground text-sm font-medium hover:bg-secondary/80 transition-colors flex items-center justify-center gap-2"
+                        >
+                            <KeyRound className="w-4 h-4" /> Import from Seed Phrase
+                        </button>
+                        <label className="w-full py-2.5 rounded-xl bg-secondary/50 text-secondary-foreground text-sm font-medium hover:bg-secondary/60 transition-colors flex items-center justify-center gap-2 cursor-pointer">
+                            <Upload className="w-4 h-4" /> Import JSON File
+                            <input type="file" accept=".json" onChange={handleImport} className="hidden" />
+                        </label>
+                    </div>
+                )}
             </div>
 
             <p className="text-[10px] text-muted-foreground text-center mt-6 max-w-xs">

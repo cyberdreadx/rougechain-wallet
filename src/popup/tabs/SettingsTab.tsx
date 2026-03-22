@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { Lock, LogOut, Globe, Clock, Download, Upload, Shield, ExternalLink } from "lucide-react";
+import { Lock, LogOut, Globe, Clock, Download, Upload, Shield, ExternalLink, Copy } from "lucide-react";
 import type { UnifiedWallet } from "../../lib/unified-wallet";
 import {
     lockUnifiedWallet,
@@ -164,6 +164,53 @@ export default function SettingsTab({ wallet, onLock, onDisconnect }: Props) {
                     </button>
                 </div>
             </div>
+
+            {/* Recovery Phrase */}
+            {wallet.mnemonic && (
+                <div className="p-3 border-b border-border">
+                    <div className="flex items-center justify-between mb-2">
+                        <div className="flex items-center gap-2">
+                            <Shield className="w-3.5 h-3.5 text-warning" />
+                            <span className="text-xs font-medium text-foreground">Recovery Phrase</span>
+                        </div>
+                        <button
+                            onClick={() => setShowExport(!showExport)}
+                            className="text-[10px] text-primary hover:text-primary/80 transition-colors"
+                        >
+                            {showExport ? "Hide" : "Reveal"}
+                        </button>
+                    </div>
+                    {showExport ? (
+                        <div className="space-y-2">
+                            <div className="p-2.5 rounded-lg bg-warning/5 border border-warning/20">
+                                <p className="text-[10px] text-warning mb-2 font-medium">
+                                    ⚠ Never share your recovery phrase. Anyone with these words can access your wallet.
+                                </p>
+                                <div className="grid grid-cols-3 gap-1.5">
+                                    {wallet.mnemonic.split(" ").map((word, i) => (
+                                        <div key={i} className="flex items-center gap-1 px-2 py-1.5 rounded-md bg-background border border-border">
+                                            <span className="text-[9px] text-muted-foreground w-4 text-right">{i + 1}.</span>
+                                            <span className="text-[11px] font-mono text-foreground">{word}</span>
+                                        </div>
+                                    ))}
+                                </div>
+                            </div>
+                            <button
+                                onClick={() => {
+                                    navigator.clipboard.writeText(wallet.mnemonic!);
+                                }}
+                                className="w-full py-1.5 rounded-lg bg-secondary text-secondary-foreground text-xs font-medium hover:bg-secondary/80 transition-colors flex items-center justify-center gap-1.5"
+                            >
+                                <Copy className="w-3 h-3" /> Copy to Clipboard
+                            </button>
+                        </div>
+                    ) : (
+                        <p className="text-[10px] text-muted-foreground">
+                            {wallet.mnemonic.split(" ").length} words · Tap "Reveal" to view
+                        </p>
+                    )}
+                </div>
+            )}
 
             {/* Backup */}
             <div className="p-3 border-b border-border">

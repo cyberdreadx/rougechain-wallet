@@ -2,7 +2,7 @@ import { useState, useEffect, useRef } from "react";
 import {
     ArrowLeft, Send, Lock, Shield, Plus, Loader2,
     MessageCircle, CheckCircle2, XCircle, Timer,
-    Paperclip, EyeOff, Image as ImageIcon, Video, X, Trash2, KeyRound, Ban
+    Paperclip, EyeOff, Image as ImageIcon, Video, X, Trash2, KeyRound, Ban, Eye
 } from "lucide-react";
 import type { UnifiedWallet } from "../../lib/unified-wallet";
 import { toMessengerWallet, saveUnifiedWallet } from "../../lib/unified-wallet";
@@ -20,6 +20,8 @@ import {
     blockWallet,
     unblockWallet,
     getBlockedWalletIds,
+    getPrivacySettings,
+    savePrivacySettings,
     type Conversation,
     type Message,
     type MessageType,
@@ -49,6 +51,7 @@ export default function MessengerTab({ wallet }: Props) {
     const [regStatus, setRegStatus] = useState<"pending" | "ok" | "error">("pending");
     const [regError, setRegError] = useState<string | null>(null);
     const [isRegeneratingKeys, setIsRegeneratingKeys] = useState(false);
+    const [discoverable, setDiscoverable] = useState(() => getPrivacySettings().discoverable);
 
     const messengerWallet = toMessengerWallet(wallet) as WalletWithPrivateKeys;
 
@@ -160,6 +163,27 @@ export default function MessengerTab({ wallet }: Props) {
                         title="Regenerate keys (fixes key mismatch errors)"
                     >
                         <KeyRound className={`w-3.5 h-3.5 ${isRegeneratingKeys ? "animate-spin" : ""}`} />
+                    </button>
+                    <button
+                        onClick={async () => {
+                            const next = !discoverable;
+                            setDiscoverable(next);
+                            savePrivacySettings({ discoverable: next });
+                            await registerWalletOnNode({
+                                id: wallet.id,
+                                displayName: wallet.displayName,
+                                signingPublicKey: wallet.signingPublicKey,
+                                encryptionPublicKey: wallet.encryptionPublicKey,
+                            });
+                        }}
+                        className={`w-7 h-7 rounded-lg flex items-center justify-center transition-colors ${
+                            discoverable
+                                ? "bg-green-500/20 text-green-400 hover:bg-green-500/30"
+                                : "bg-red-500/20 text-red-400 hover:bg-red-500/30"
+                        }`}
+                        title={discoverable ? "Discoverable: ON (visible to others)" : "Discoverable: OFF (hidden from contacts)"}
+                    >
+                        {discoverable ? <Eye className="w-3.5 h-3.5" /> : <EyeOff className="w-3.5 h-3.5" />}
                     </button>
                     <button
                         onClick={() => { setShowContacts(!showContacts); loadContacts(); }}

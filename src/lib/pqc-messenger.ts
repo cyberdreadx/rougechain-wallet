@@ -56,6 +56,25 @@ export interface Conversation {
 
 const MESSENGER_API_PREFIX = "/messenger";
 const BLOCKED_WALLETS_KEY = "pqc_blocked_wallets";
+const PRIVACY_SETTINGS_KEY = "pqc_privacy_settings";
+
+// --- Privacy settings ---
+
+export interface PrivacySettings {
+    discoverable: boolean;
+}
+
+export function getPrivacySettings(): PrivacySettings {
+    try {
+        const stored = localStorage.getItem(PRIVACY_SETTINGS_KEY);
+        if (stored) return { discoverable: JSON.parse(stored).discoverable ?? true };
+    } catch { /* ignore */ }
+    return { discoverable: true };
+}
+
+export function savePrivacySettings(settings: PrivacySettings): void {
+    localStorage.setItem(PRIVACY_SETTINGS_KEY, JSON.stringify(settings));
+}
 
 // --- Block list helpers ---
 
@@ -258,6 +277,7 @@ function getMessengerApiBase(): string | null {
 export async function registerWalletOnNode(wallet: Wallet): Promise<void> {
     const apiBase = getMessengerApiBase();
     if (!apiBase) throw new Error("Node not configured");
+    const privacy = getPrivacySettings();
 
     const res = await fetch(`${apiBase}/wallets/register`, {
         method: "POST",
@@ -267,6 +287,7 @@ export async function registerWalletOnNode(wallet: Wallet): Promise<void> {
             displayName: wallet.displayName,
             signingPublicKey: wallet.signingPublicKey,
             encryptionPublicKey: wallet.encryptionPublicKey,
+            discoverable: privacy.discoverable,
         }),
     });
     if (!res.ok) throw new Error(`Registration failed: ${await res.text()}`);
