@@ -24,7 +24,7 @@
 - **NFTs** — Create collections, mint NFTs, view your gallery
 - **Messenger** — End-to-end encrypted chat using ML-KEM-768 key exchange
 - **Mail** — Encrypted mail system with quantum-safe encryption
-- **Security** — Vault lock with AES-256-GCM, auto-lock timer, PBKDF2 key derivation
+- **Security** — Vault lock with AES-256-GCM, auto-lock timer, PBKDF2 key derivation, encrypted `.pqcbackup` exports
 - **dApp Provider** — `window.rougechain` API with approval dialogs for web3 dApps
 - **Cross-browser** — Chrome, Edge, Brave, Opera, Arc, Firefox (Manifest V3)
 

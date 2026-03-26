@@ -568,7 +568,7 @@ export default function WalletTab({ wallet }: Props) {
                                                 </div>
                                             )}
                                             <a
-                                                href="https://rougechain.io/blockchain"
+                                                href={`https://rougechain.io/tx/${tx.txHash || tx.id}`}
                                                 target="_blank"
                                                 rel="noopener noreferrer"
                                                 className="flex items-center justify-center gap-1.5 w-full mt-1 py-1.5 rounded-md bg-primary/10 text-primary text-[10px] font-medium hover:bg-primary/20 transition-colors"
