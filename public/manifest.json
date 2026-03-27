@@ -1,8 +1,8 @@
 {
     "manifest_version": 3,
     "name": "RougeChain Wallet",
-    "version": "1.0.1",
-    "description": "Quantum-safe cryptocurrency wallet & encrypted messenger for RougeChain",
+    "version": "1.1.0",
+    "description": "Quantum-safe Web3 wallet, encrypted messenger & mail, NFT studio, and dApp gateway for RougeChain.",
     "homepage_url": "https://github.com/cyberdreadx/rougechain-wallet",
     "action": {
         "default_popup": "popup.html",
