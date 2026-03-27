@@ -110,6 +110,13 @@ export const MAIL_DOMAIN = "rouge.quant";
 export const MAIL_DOMAIN_ALT = "qwalla.mail";
 export const MAIL_DOMAINS = [MAIL_DOMAIN, MAIL_DOMAIN_ALT];
 
+export interface MailAttachment {
+    name: string;
+    type: string;
+    data: string;
+    size: number;
+}
+
 export interface MailMessage {
     id: string;
     fromWalletId: string;
@@ -127,6 +134,7 @@ export interface MailMessage {
     body?: string;
     signatureValid?: boolean | null;
     senderName?: string;
+    attachmentData?: MailAttachment;
 }
 
 export interface MailLabel {
@@ -244,6 +252,7 @@ export async function sendMail(
     subject: string,
     body: string,
     replyToId?: string,
+    attachment?: MailAttachment,
 ): Promise<MailMessage> {
     const base = getMailApiBase();
     if (!base) throw new Error("Node not configured");
@@ -252,7 +261,9 @@ export async function sendMail(
 
     const recipientEncPubKeys: string[] = [];
     for (const toId of toWalletIds) {
-        const w = allWallets.find(w => w.id === toId);
+        const w = allWallets.find(w => w.id === toId ||
+            w.signingPublicKey === toId ||
+            w.encryptionPublicKey === toId);
         if (!w?.encryptionPublicKey) throw new Error(`Recipient ${toId} encryption key not found`);
         recipientEncPubKeys.push(w.encryptionPublicKey);
     }
@@ -260,8 +271,15 @@ export async function sendMail(
     const subjectEncrypted = await encryptForMultipleRecipients(subject, recipientEncPubKeys, wallet.encryptionPublicKey);
     const bodyEncrypted = await encryptForMultipleRecipients(body, recipientEncPubKeys, wallet.encryptionPublicKey);
 
+    let attachmentEncrypted: string | undefined;
+    if (attachment) {
+        attachmentEncrypted = await encryptForMultipleRecipients(
+            JSON.stringify(attachment), recipientEncPubKeys, wallet.encryptionPublicKey,
+        );
+    }
+
     const { ml_dsa65 } = await import("@noble/post-quantum/ml-dsa.js");
-    const sigPayload = subjectEncrypted + "|" + bodyEncrypted;
+    const sigPayload = subjectEncrypted + "|" + bodyEncrypted + (attachmentEncrypted ? "|" + attachmentEncrypted : "");
     const sigBytes = ml_dsa65.sign(
         new TextEncoder().encode(sigPayload),
         hexToBytes(wallet.signingPrivateKey),
@@ -274,9 +292,10 @@ export async function sendMail(
             toWalletIds,
             subjectEncrypted,
             bodyEncrypted,
+            attachmentEncrypted: attachmentEncrypted || undefined,
             contentSignature: mailSignature,
             replyToId: replyToId || null,
-            hasAttachment: false,
+            hasAttachment: !!attachment,
         },
         wallet.signingPrivateKey,
         wallet.signingPublicKey,
@@ -367,7 +386,9 @@ async function getFolder(wallet: WalletWithPrivateKeys, folder: string, cacheCat
         for (const raw of rawItems) {
             const msg = normalizeMailMessage(raw.message || raw);
             const label = normalizeMailLabel(raw.label || {});
-            const isSender = msg.fromWalletId === wallet.id;
+            const isSender = msg.fromWalletId === wallet.id
+                || msg.fromWalletId === wallet.signingPublicKey
+                || msg.fromWalletId === wallet.encryptionPublicKey;
 
             const senderWallet = allWallets.find(w =>
                 w.id === msg.fromWalletId ||
@@ -402,10 +423,18 @@ async function getFolder(wallet: WalletWithPrivateKeys, folder: string, cacheCat
                 }
             }
 
+            let attachmentData: MailAttachment | undefined;
+            if (msg.hasAttachment && msg.attachmentEncrypted) {
+                try {
+                    const decrypted = await decryptMailContent(msg.attachmentEncrypted, wallet.encryptionPrivateKey, wallet.encryptionPublicKey);
+                    attachmentData = JSON.parse(decrypted) as MailAttachment;
+                } catch { /* attachment decrypt failed */ }
+            }
+
             const senderName = await getSenderDisplayName(msg.fromWalletId, allWallets);
 
             items.push({
-                message: { ...msg, subject, body, signatureValid, senderName },
+                message: { ...msg, subject, body, signatureValid, senderName, attachmentData },
                 label,
             });
         }
@@ -419,7 +448,10 @@ async function getFolder(wallet: WalletWithPrivateKeys, folder: string, cacheCat
 async function getSenderDisplayName(walletId: string, allWallets: Wallet[]): Promise<string> {
     const name = await reverseLookup(walletId);
     if (name) return `${name}@${MAIL_DOMAIN}`;
-    const w = allWallets.find(w => w.id === walletId);
+    const w = allWallets.find(w =>
+        w.id === walletId ||
+        w.signingPublicKey === walletId ||
+        w.encryptionPublicKey === walletId);
     return w?.displayName || walletId.substring(0, 12) + "...";
 }
 

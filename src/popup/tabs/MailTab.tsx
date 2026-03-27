@@ -14,6 +14,7 @@ import {
     registerName, reverseLookup, resolveRecipient,
     MAIL_DOMAIN,
     type MailItem,
+    type MailAttachment,
 } from "../../lib/pqc-mail";
 
 interface Props {
@@ -655,6 +656,48 @@ function SettingsViewExt({
     );
 }
 
+function AttachmentCard({ attachment }: { attachment: MailAttachment }) {
+    const isImage = attachment.type?.startsWith("image/");
+    const sizeLabel = attachment.size < 1024
+        ? `${attachment.size} B`
+        : attachment.size < 1024 * 1024
+        ? `${(attachment.size / 1024).toFixed(1)} KB`
+        : `${(attachment.size / (1024 * 1024)).toFixed(1)} MB`;
+
+    const handleDownload = () => {
+        const a = document.createElement("a");
+        a.href = `data:${attachment.type};base64,${attachment.data}`;
+        a.download = attachment.name;
+        a.click();
+    };
+
+    return (
+        <div className="mt-2 border border-border rounded-lg p-2 bg-card/50">
+            <div className="flex items-center gap-2">
+                {isImage ? <ImageIcon className="w-3.5 h-3.5 text-primary" /> : <FileText className="w-3.5 h-3.5 text-primary" />}
+                <div className="flex-1 min-w-0">
+                    <p className="text-[10px] font-medium text-foreground truncate">{attachment.name}</p>
+                    <p className="text-[9px] text-muted-foreground">{sizeLabel}</p>
+                </div>
+                <button
+                    onClick={handleDownload}
+                    className="w-6 h-6 rounded flex items-center justify-center hover:bg-secondary/50 text-muted-foreground hover:text-foreground transition-colors"
+                    title="Download"
+                >
+                    <Download className="w-3 h-3" />
+                </button>
+            </div>
+            {isImage && (
+                <img
+                    src={`data:${attachment.type};base64,${attachment.data}`}
+                    alt={attachment.name}
+                    className="mt-2 rounded max-h-40 w-auto"
+                />
+            )}
+        </div>
+    );
+}
+
 function ThreadMessage({
     item,
     isLatest,
@@ -724,6 +767,7 @@ function ThreadMessage({
                 }`}>
                     {message.body}
                 </div>
+                {message.attachmentData && <AttachmentCard attachment={message.attachmentData} />}
             </div>
         </div>
     );
@@ -852,6 +896,7 @@ function ReadView({
                                 message.body
                             )}
                         </div>
+                        {message.attachmentData && <AttachmentCard attachment={message.attachmentData} />}
                     </div>
                 )}
 
