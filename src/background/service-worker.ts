@@ -9,14 +9,6 @@ interface ConnectedSite {
     connectedAt: number;
 }
 
-// ─── Auto-lock ───────────────────────────────────────────
-
-chrome.alarms.onAlarm.addListener((alarm) => {
-    if (alarm.name === "auto-lock") {
-        chrome.storage.local.remove("pqc-unified-wallet");
-    }
-});
-
 chrome.runtime.onConnect.addListener((port) => {
     if (port.name === "popup") {
         chrome.storage.local.get("pqc-unified-wallet-vault-settings", (data) => {
@@ -42,7 +34,374 @@ chrome.runtime.onConnect.addListener((port) => {
 
 chrome.runtime.onInstalled.addListener(() => {
     console.log("RougeChain Wallet Extension installed");
+    chrome.alarms.create("check-notifications", { periodInMinutes: 0.25 });
 });
+
+// ─── Notifications via WebSocket + polling ───────────────
+
+let wsConnection: WebSocket | null = null;
+let wsRetryTimeout: ReturnType<typeof setTimeout> | null = null;
+
+function getLastKnownUnread(): Promise<number> {
+    return new Promise((resolve) => {
+        chrome.storage.local.get("rougechain-last-unread", (data) => {
+            resolve(data["rougechain-last-unread"] ?? 0);
+        });
+    });
+}
+
+function setLastKnownUnread(count: number) {
+    chrome.storage.local.set({ "rougechain-last-unread": count });
+}
+
+function getLastKnownUnreadMail(): Promise<number> {
+    return new Promise((resolve) => {
+        chrome.storage.local.get("rougechain-last-unread-mail", (data) => {
+            resolve(data["rougechain-last-unread-mail"] ?? 0);
+        });
+    });
+}
+
+function setLastKnownUnreadMail(count: number) {
+    chrome.storage.local.set({ "rougechain-last-unread-mail": count });
+}
+
+function getNotifSettings(): Promise<{ enabled: boolean; txEnabled: boolean; msgEnabled: boolean; mailEnabled: boolean }> {
+    return new Promise((resolve) => {
+        chrome.storage.local.get("rougechain-notif-settings", (data) => {
+            const raw = data["rougechain-notif-settings"];
+            if (raw) {
+                try {
+                    const parsed = JSON.parse(raw);
+                    resolve({ mailEnabled: true, ...parsed });
+                    return;
+                } catch { /* fall through */ }
+            }
+            resolve({ enabled: true, txEnabled: true, msgEnabled: true, mailEnabled: true });
+        });
+    });
+}
+
+function showNotification(id: string, title: string, message: string, contextMessage?: string) {
+    chrome.notifications.create(id, {
+        type: "basic",
+        iconUrl: "icons/icon-128.png",
+        title,
+        message,
+        contextMessage,
+        priority: 2,
+    });
+}
+
+function formatAmount(raw: number | undefined): string {
+    if (raw === undefined || raw === null) return "";
+    if (raw >= 1_000_000) return `${(raw / 1_000_000).toFixed(2)}M`;
+    if (raw >= 1_000) return `${(raw / 1_000).toFixed(2)}K`;
+    return String(raw);
+}
+
+function shortAddr(addr: string): string {
+    if (addr.length <= 16) return addr;
+    return `${addr.slice(0, 8)}…${addr.slice(-6)}`;
+}
+
+async function handleWsEvent(event: Record<string, unknown>) {
+    const settings = await getNotifSettings();
+    if (!settings.enabled) return;
+
+    const wallet = await getWalletData();
+    if (!wallet) return;
+
+    const myKey = wallet.publicKey;
+    const type = event.type as string;
+
+    if (type === "new_transaction" && settings.txEnabled) {
+        const from = event.from as string | undefined;
+        const to = event.to as string | undefined;
+        const amount = event.amount as number | undefined;
+        const txType = (event.tx_type || "") as string;
+        const txHash = (event.tx_hash || "") as string;
+        const amtStr = formatAmount(amount);
+
+        if (to === myKey && from !== myKey) {
+            if (txType === "transfer" || txType === "") {
+                showNotification(
+                    `rx-${txHash}`,
+                    "Received XRGE",
+                    `${amtStr ? amtStr + " XRGE" : "Tokens"} from ${shortAddr(from || "unknown")}`,
+                );
+            } else if (txType === "token_transfer") {
+                showNotification(
+                    `rx-${txHash}`,
+                    "Token Received",
+                    `${amtStr || ""} tokens from ${shortAddr(from || "unknown")}`,
+                );
+            }
+        } else if (from === myKey) {
+            if (txType === "transfer" || txType === "") {
+                showNotification(
+                    `tx-${txHash}`,
+                    "Transaction Confirmed",
+                    `Sent ${amtStr ? amtStr + " XRGE" : ""} to ${shortAddr(to || "unknown")}`,
+                );
+            } else if (txType === "token_transfer") {
+                showNotification(
+                    `tx-${txHash}`,
+                    "Token Sent",
+                    `${amtStr || ""} tokens to ${shortAddr(to || "unknown")}`,
+                );
+            } else if (txType === "deploy_contract") {
+                showNotification(
+                    `tx-${txHash}`,
+                    "Contract Deployed",
+                    "Your smart contract was deployed successfully",
+                );
+            } else if (txType === "call_contract") {
+                showNotification(
+                    `tx-${txHash}`,
+                    "Contract Call Confirmed",
+                    "Your contract call executed successfully",
+                );
+            } else if (txType === "create_token") {
+                showNotification(
+                    `tx-${txHash}`,
+                    "Token Created",
+                    "Your new token was created on-chain",
+                );
+            } else if (txType === "stake") {
+                showNotification(
+                    `tx-${txHash}`,
+                    "Stake Confirmed",
+                    `${amtStr ? amtStr + " XRGE" : ""} staked as validator`,
+                );
+            } else if (txType === "unstake") {
+                showNotification(
+                    `tx-${txHash}`,
+                    "Unstake Initiated",
+                    "Your unstake request is being processed",
+                );
+            } else if (txType === "shield" || txType === "unshield") {
+                showNotification(
+                    `tx-${txHash}`,
+                    txType === "shield" ? "Shield Confirmed" : "Unshield Confirmed",
+                    `${amtStr ? amtStr + " XRGE" : ""} ${txType}ed successfully`,
+                );
+            } else {
+                showNotification(
+                    `tx-${txHash}`,
+                    "Transaction Confirmed",
+                    `${txType} transaction confirmed`,
+                );
+            }
+        }
+    }
+
+    if (type === "balance_update" && settings.txEnabled) {
+        const account = event.account as string | undefined;
+        const token = event.token as string | undefined;
+        const newBalance = event.new_balance as number | undefined;
+        if (account === myKey && token && token !== "XRGE" && newBalance !== undefined) {
+            showNotification(
+                `bal-${token}-${Date.now()}`,
+                `${token} Balance Updated`,
+                `New balance: ${newBalance} ${token}`,
+            );
+        }
+    }
+}
+
+async function connectWebSocket() {
+    const wallet = await getWalletData();
+    if (!wallet) return;
+
+    const baseUrl = await getApiBaseUrl();
+    const wsUrl = baseUrl.replace(/^http/, "ws").replace(/\/api$/, "/api/ws");
+
+    if (wsConnection && (wsConnection.readyState === WebSocket.OPEN || wsConnection.readyState === WebSocket.CONNECTING)) {
+        return;
+    }
+
+    try {
+        wsConnection = new WebSocket(wsUrl);
+
+        wsConnection.onopen = () => {
+            console.log("[notif] WebSocket connected");
+            wsConnection!.send(JSON.stringify({
+                subscribe: [
+                    `account:${wallet.publicKey}`,
+                    "transactions",
+                ],
+            }));
+        };
+
+        wsConnection.onmessage = (ev) => {
+            try {
+                const data = JSON.parse(ev.data);
+                handleWsEvent(data);
+            } catch { /* ignore parse errors */ }
+        };
+
+        wsConnection.onclose = () => {
+            console.log("[notif] WebSocket closed, reconnecting in 30s");
+            wsConnection = null;
+            if (wsRetryTimeout) clearTimeout(wsRetryTimeout);
+            wsRetryTimeout = setTimeout(connectWebSocket, 30_000);
+        };
+
+        wsConnection.onerror = () => {
+            wsConnection?.close();
+        };
+    } catch {
+        if (wsRetryTimeout) clearTimeout(wsRetryTimeout);
+        wsRetryTimeout = setTimeout(connectWebSocket, 30_000);
+    }
+}
+
+async function checkUnreadMessages() {
+    const settings = await getNotifSettings();
+    if (!settings.enabled || !settings.msgEnabled) return;
+
+    const wallet = await getWalletData();
+    if (!wallet) return;
+
+    const baseUrl = await getApiBaseUrl();
+    try {
+        const timestamp = Date.now();
+        const nonce = `notif-${timestamp}`;
+        const payload: Record<string, unknown> = { timestamp, nonce };
+        const payloadStr = JSON.stringify(payload, Object.keys(payload).sort());
+        const res = await fetch(`${baseUrl}/v2/messenger/conversations/list`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+                payload,
+                signature: "",
+                public_key: wallet.publicKey,
+            }),
+        });
+        if (!res.ok) return;
+        const data = await res.json();
+        const convos = data.conversations || [];
+        let total = 0;
+        for (const c of convos) {
+            total += (c.unread_count ?? 0);
+        }
+
+        const lastKnown = await getLastKnownUnread();
+        if (total > lastKnown && lastKnown >= 0) {
+            const diff = total - lastKnown;
+            showNotification(
+                `msg-${Date.now()}`,
+                "New Message" + (diff > 1 ? "s" : ""),
+                `You have ${diff} new encrypted message${diff > 1 ? "s" : ""}`,
+            );
+        }
+        setLastKnownUnread(total);
+
+        const mailUnread = await getLastKnownUnreadMail();
+        const combinedBadge = total + Math.max(mailUnread, 0);
+        chrome.action.setBadgeText({ text: combinedBadge > 0 ? String(combinedBadge) : "" });
+        chrome.action.setBadgeBackgroundColor({ color: "#00CEB6" });
+    } catch { /* ignore fetch errors */ }
+}
+
+async function checkUnreadMail() {
+    const settings = await getNotifSettings();
+    if (!settings.enabled || !settings.mailEnabled) return;
+
+    const wallet = await getWalletData();
+    if (!wallet) return;
+
+    const baseUrl = await getApiBaseUrl();
+    try {
+        const timestamp = Date.now();
+        const nonce = `mail-notif-${timestamp}`;
+        const payload: Record<string, unknown> = { walletId: wallet.publicKey, folder: "inbox", timestamp, nonce };
+        const res = await fetch(`${baseUrl}/v2/mail/folder`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+                payload,
+                signature: "",
+                public_key: wallet.publicKey,
+            }),
+        });
+        if (!res.ok) return;
+        const data = await res.json();
+        const messages = data.messages || [];
+        let unreadCount = 0;
+        for (const raw of messages) {
+            const label = raw.label || {};
+            const isRead = label.is_read ?? label.isRead ?? true;
+            if (!isRead) unreadCount++;
+        }
+
+        const lastKnown = await getLastKnownUnreadMail();
+        if (unreadCount > lastKnown && lastKnown >= 0) {
+            const diff = unreadCount - lastKnown;
+            showNotification(
+                `mail-${Date.now()}`,
+                "New Email" + (diff > 1 ? "s" : ""),
+                `You have ${diff} new encrypted email${diff > 1 ? "s" : ""}`,
+            );
+        }
+        setLastKnownUnreadMail(unreadCount);
+    } catch { /* ignore fetch errors */ }
+}
+
+// Connect WS when wallet data becomes available
+chrome.storage.onChanged.addListener((changes) => {
+    if (changes["pqc-unified-wallet"]) {
+        if (changes["pqc-unified-wallet"].newValue) {
+            connectWebSocket();
+            setLastKnownUnread(-1);
+            setLastKnownUnreadMail(-1);
+            checkUnreadMessages();
+            checkUnreadMail();
+        } else {
+            wsConnection?.close();
+            wsConnection = null;
+            setLastKnownUnread(0);
+            setLastKnownUnreadMail(0);
+            chrome.action.setBadgeText({ text: "" });
+        }
+    }
+});
+
+// Click notification → open popup
+chrome.notifications.onClicked.addListener((notifId) => {
+    chrome.notifications.clear(notifId);
+    chrome.action.openPopup?.();
+});
+
+// ─── Alarm handler (auto-lock + notification polling) ────
+
+chrome.alarms.onAlarm.addListener((alarm) => {
+    if (alarm.name === "auto-lock") {
+        chrome.storage.local.remove("pqc-unified-wallet");
+    }
+    if (alarm.name === "check-notifications") {
+        checkUnreadMessages();
+        checkUnreadMail();
+        if (!wsConnection || wsConnection.readyState !== WebSocket.OPEN) {
+            connectWebSocket();
+        }
+    }
+});
+
+// When popup signals unread counts updated, sync stored counts and badge
+chrome.runtime.onMessage.addListener((msg) => {
+    if (msg?.type === "messages-read") {
+        const total = typeof msg.unread === "number" ? msg.unread : 0;
+        setLastKnownUnread(total);
+        chrome.action.setBadgeText({ text: total > 0 ? String(total) : "" });
+        chrome.action.setBadgeBackgroundColor({ color: "#00CEB6" });
+    }
+});
+
+// Boot: try connecting immediately
+connectWebSocket();
+chrome.alarms.create("check-notifications", { periodInMinutes: 0.25 });
 
 // ─── Storage helpers ─────────────────────────────────────
 

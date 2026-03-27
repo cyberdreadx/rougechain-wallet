@@ -2,7 +2,8 @@ import { useState, useEffect } from "react";
 import {
     ArrowLeft, Send, Inbox, SendHorizonal, Trash2, Loader2,
     Mail, Plus, RefreshCw, CheckCircle2, XCircle, AtSign, Reply,
-    MailOpen, Settings, ToggleLeft, ToggleRight, Type,
+    MailOpen, Settings, ToggleLeft, ToggleRight, Type, Lock,
+    Forward, Paperclip, Download, X, FileText, Image as ImageIcon, ShieldQuestion,
 } from "lucide-react";
 import type { UnifiedWallet } from "../../lib/unified-wallet";
 import { toMessengerWallet } from "../../lib/unified-wallet";
@@ -53,16 +54,21 @@ function formatDate(dateInput: string): string {
     } catch { return ""; }
 }
 
-function buildThread(allItems: MailItem[], selected: MailItem): MailItem[] {
-    const byId = new Map<string, MailItem>();
-    for (const item of allItems) byId.set(item.message.id, item);
-
-    let rootId = selected.message.id;
-    let cur = selected.message;
+function findRootId(item: MailItem, byId: Map<string, MailItem>): string {
+    let rootId = item.message.id;
+    let cur = item.message;
     while (cur.replyToId && byId.has(cur.replyToId)) {
         rootId = cur.replyToId;
         cur = byId.get(cur.replyToId)!.message;
     }
+    return rootId;
+}
+
+function buildThread(allItems: MailItem[], selected: MailItem): MailItem[] {
+    const byId = new Map<string, MailItem>();
+    for (const item of allItems) byId.set(item.message.id, item);
+
+    const rootId = findRootId(selected, byId);
 
     const threadIds = new Set<string>();
     const collect = (parentId: string) => {
@@ -80,6 +86,54 @@ function buildThread(allItems: MailItem[], selected: MailItem): MailItem[] {
         .sort((a, b) => new Date(a.message.createdAt).getTime() - new Date(b.message.createdAt).getTime());
 }
 
+interface ThreadGroup {
+    rootId: string;
+    subject: string;
+    latestItem: MailItem;
+    messages: MailItem[];
+    participants: string[];
+    hasUnread: boolean;
+    latestDate: string;
+}
+
+function groupByThread(items: MailItem[]): ThreadGroup[] {
+    const byId = new Map<string, MailItem>();
+    for (const item of items) byId.set(item.message.id, item);
+
+    const groups = new Map<string, MailItem[]>();
+    for (const item of items) {
+        const rootId = findRootId(item, byId);
+        const arr = groups.get(rootId) || [];
+        arr.push(item);
+        groups.set(rootId, arr);
+    }
+
+    const result: ThreadGroup[] = [];
+    for (const [rootId, msgs] of groups) {
+        msgs.sort((a, b) => new Date(a.message.createdAt).getTime() - new Date(b.message.createdAt).getTime());
+        const latest = msgs[msgs.length - 1];
+        const root = byId.get(rootId);
+        const subject = root?.message.subject || latest.message.subject || "(No subject)";
+        const participantSet = new Set<string>();
+        for (const m of msgs) {
+            const name = m.message.senderName || "Unknown";
+            participantSet.add(name);
+        }
+        result.push({
+            rootId,
+            subject,
+            latestItem: latest,
+            messages: msgs,
+            participants: [...participantSet],
+            hasUnread: msgs.some(m => !m.label.isRead),
+            latestDate: latest.message.createdAt,
+        });
+    }
+
+    result.sort((a, b) => new Date(b.latestDate).getTime() - new Date(a.latestDate).getTime());
+    return result;
+}
+
 export default function MailTab({ wallet }: Props) {
     const [folder, setFolder] = useState<Folder>("inbox");
     const [view, setView] = useState<View>("list");
@@ -91,6 +145,7 @@ export default function MailTab({ wallet }: Props) {
     const [nameInput, setNameInput] = useState("");
     const [nameError, setNameError] = useState<string | null>(null);
     const [nameRegistering, setNameRegistering] = useState(false);
+    const [replyItem, setReplyItem] = useState<MailItem | null>(null);
     const [threadItems, setThreadItems] = useState<MailItem[]>([]);
     const [mailSettings, setMailSettings] = useState<MailSettings>(loadMailSettings);
 
@@ -127,7 +182,7 @@ export default function MailTab({ wallet }: Props) {
         setNameRegistering(true);
         setNameError(null);
         try {
-            const result = await registerName(nameInput.trim(), wallet.id);
+            const result = await registerName(messengerWallet, nameInput.trim(), wallet.id);
             if (result.success) {
                 setMyName(nameInput.trim().toLowerCase());
                 setShowNameReg(false);
@@ -145,7 +200,7 @@ export default function MailTab({ wallet }: Props) {
         setSelectedItem(item);
         setView("read");
         if (!item.label.isRead) {
-            markMailRead(wallet.id, item.message.id).catch(() => {});
+            markMailRead(messengerWallet, item.message.id).catch(() => {});
         }
         try {
             const [inbox, sent] = await Promise.all([
@@ -176,7 +231,8 @@ export default function MailTab({ wallet }: Props) {
             <ComposeView
                 wallet={messengerWallet}
                 myName={myName}
-                onBack={() => { setView("list"); loadFolder(); }}
+                onBack={() => { setView("list"); setReplyItem(null); loadFolder(); }}
+                replyTo={replyItem}
                 mailSettings={mailSettings}
             />
         );
@@ -191,40 +247,43 @@ export default function MailTab({ wallet }: Props) {
                 folder={folder}
                 thread={threadItems}
                 onBack={() => { setView("list"); setThreadItems([]); loadFolder(); }}
-                onReply={() => setView("compose")}
+                onReply={() => { setReplyItem(selectedItem); setView("compose"); }}
             />
         );
     }
 
-    const unreadCount = items.filter(i => !i.label.isRead).length;
+    const threads = groupByThread(items);
+    const unreadCount = threads.filter(t => t.hasUnread).length;
 
     return (
         <div className="flex flex-col h-full">
             {/* Header */}
             <div className="flex items-center justify-between px-3 py-2 border-b border-border">
-                <div className="flex items-center gap-2">
-                    <Mail className="w-3.5 h-3.5 text-primary" />
-                    <span className="text-xs font-medium text-muted-foreground uppercase tracking-wider">
-                        Mail
-                    </span>
-                    {myName && (
-                        <span className="text-[10px] text-primary font-mono">
-                            {myName}@{MAIL_DOMAIN}
+                <div className="flex items-center gap-2 min-w-0">
+                    <Mail className="w-3.5 h-3.5 text-primary flex-shrink-0" />
+                    <div className="flex flex-col min-w-0">
+                        <span className="text-xs font-medium text-muted-foreground uppercase tracking-wider">
+                            Mail
                         </span>
-                    )}
+                        {myName && (
+                            <span className="text-[10px] text-primary font-mono truncate">
+                                {myName}@{MAIL_DOMAIN}
+                            </span>
+                        )}
+                    </div>
                 </div>
                 <div className="flex items-center gap-1">
                     {!myName && (
                         <button
                             onClick={() => setShowNameReg(!showNameReg)}
                             className="w-7 h-7 rounded-lg bg-amber-500/20 flex items-center justify-center text-amber-500 hover:bg-amber-500/30 transition-colors"
-                            title="Claim your @rouge.quant address"
+                            title={`Claim your @${MAIL_DOMAIN} address`}
                         >
                             <AtSign className="w-3.5 h-3.5" />
                         </button>
                     )}
                     <button
-                        onClick={() => setView("compose")}
+                        onClick={() => { setReplyItem(null); setView("compose"); }}
                         className="w-7 h-7 rounded-lg bg-primary/20 flex items-center justify-center text-primary hover:bg-primary/30 transition-colors"
                     >
                         <Plus className="w-3.5 h-3.5" />
@@ -249,7 +308,7 @@ export default function MailTab({ wallet }: Props) {
             {showNameReg && (
                 <div className="px-3 py-2 border-b border-border bg-amber-500/5">
                     <p className="text-[10px] text-muted-foreground mb-1.5">
-                        Claim your @{MAIL_DOMAIN} address
+                        Claim your @{MAIL_DOMAIN} address to receive mail by name
                     </p>
                     <div className="flex items-center gap-1.5">
                         <input
@@ -303,45 +362,55 @@ export default function MailTab({ wallet }: Props) {
                 ))}
             </div>
 
-            {/* Message list */}
+            {/* Thread list */}
             <div className="flex-1 overflow-y-auto">
                 {isLoading ? (
                     <div className="flex items-center justify-center h-32">
                         <Loader2 className="w-5 h-5 animate-spin text-primary" />
                     </div>
-                ) : items.length === 0 ? (
+                ) : threads.length === 0 ? (
                     <div className="flex flex-col items-center justify-center h-32 text-muted-foreground">
                         <MailOpen className="w-8 h-8 mb-2 opacity-30" />
                         <p className="text-xs">No mail in {folder}</p>
+                        {folder === "inbox" && myName && (
+                            <p className="text-[10px] mt-0.5">{myName}@{MAIL_DOMAIN}</p>
+                        )}
                     </div>
                 ) : (
-                    items.map(item => (
+                    threads.map(thread => (
                         <button
-                            key={item.message.id}
-                            onClick={() => openMail(item)}
+                            key={thread.rootId}
+                            onClick={() => openMail(thread.latestItem)}
                             className={`w-full flex items-start gap-2 px-3 py-2.5 border-b border-border/50 hover:bg-secondary/30 transition-colors text-left ${
-                                !item.label.isRead ? "bg-primary/5" : ""
+                                thread.hasUnread ? "bg-primary/5" : ""
                             }`}
                         >
                             <div className={`w-7 h-7 rounded-full flex items-center justify-center flex-shrink-0 mt-0.5 ${
-                                !item.label.isRead ? "bg-primary/20" : "bg-muted"
+                                thread.hasUnread ? "bg-primary/20" : "bg-muted"
                             }`}>
-                                <Mail className={`w-3.5 h-3.5 ${!item.label.isRead ? "text-primary" : "text-muted-foreground"}`} />
+                                <Mail className={`w-3.5 h-3.5 ${thread.hasUnread ? "text-primary" : "text-muted-foreground"}`} />
                             </div>
                             <div className="min-w-0 flex-1">
                                 <div className="flex items-center justify-between gap-1">
-                                    <p className={`text-[11px] truncate ${!item.label.isRead ? "font-semibold text-foreground" : "text-muted-foreground"}`}>
-                                        {item.message.senderName || "Unknown"}
-                                    </p>
+                                    <div className="flex items-center gap-1 min-w-0">
+                                        <p className={`text-[11px] truncate ${thread.hasUnread ? "font-semibold text-foreground" : "text-muted-foreground"}`}>
+                                            {thread.participants.join(", ")}
+                                        </p>
+                                        {thread.messages.length > 1 && (
+                                            <span className="text-[9px] text-muted-foreground flex-shrink-0">
+                                                ({thread.messages.length})
+                                            </span>
+                                        )}
+                                    </div>
                                     <span className="text-[9px] text-muted-foreground flex-shrink-0">
-                                        {formatDate(item.message.createdAt)}
+                                        {formatDate(thread.latestDate)}
                                     </span>
                                 </div>
-                                <p className={`text-xs truncate ${!item.label.isRead ? "font-medium text-foreground" : "text-muted-foreground"}`}>
-                                    {item.message.subject || "(No subject)"}
+                                <p className={`text-xs truncate ${thread.hasUnread ? "font-medium text-foreground" : "text-muted-foreground"}`}>
+                                    {thread.subject}
                                 </p>
                                 <p className="text-[10px] text-muted-foreground truncate">
-                                    {item.message.body?.substring(0, 80) || ""}
+                                    {thread.latestItem.message.body?.substring(0, 80) || ""}
                                 </p>
                             </div>
                         </button>
@@ -356,19 +425,30 @@ function ComposeView({
     wallet,
     myName,
     onBack,
+    replyTo,
     mailSettings,
 }: {
     wallet: WalletWithPrivateKeys;
     myName: string | null;
     onBack: () => void;
+    replyTo?: MailItem | null;
     mailSettings: MailSettings;
 }) {
     const sigBlock = mailSettings.signatureEnabled && mailSettings.signature.trim()
         ? `\n\n--\n${mailSettings.signature.trim()}`
         : "";
-    const [to, setTo] = useState("");
-    const [subject, setSubject] = useState("");
-    const [body, setBody] = useState(sigBlock);
+    const isReply = !!replyTo;
+    const [to, setTo] = useState(replyTo?.message.senderName || replyTo?.message.fromWalletId || "");
+    const [subject, setSubject] = useState(
+        replyTo
+            ? (replyTo.message.subject?.startsWith("Re: ") ? replyTo.message.subject : `Re: ${replyTo.message.subject || ""}`)
+            : "",
+    );
+    const [body, setBody] = useState(
+        isReply
+            ? `${sigBlock}\n\nOn ${new Date().toLocaleDateString()}, ${replyTo!.message.senderName || "sender"} wrote:\n> ${(replyTo!.message.body || "").split("\n").join("\n> ")}`
+            : sigBlock,
+    );
     const [isSending, setIsSending] = useState(false);
     const [error, setError] = useState<string | null>(null);
     const [resolvedTo, setResolvedTo] = useState<string | null>(null);
@@ -398,7 +478,7 @@ function ComposeView({
                 return;
             }
 
-            await sendMail(wallet, [recipientId], subject, body || "(empty)");
+            await sendMail(wallet, [recipientId], subject, body || "(empty)", replyTo?.message.id);
             onBack();
         } catch (err: any) {
             setError(err.message || "Failed to send");
@@ -413,8 +493,8 @@ function ComposeView({
                 <button onClick={onBack} className="text-muted-foreground hover:text-foreground">
                     <ArrowLeft className="w-4 h-4" />
                 </button>
-                <Mail className="w-3.5 h-3.5 text-primary" />
-                <span className="text-xs font-medium">Compose</span>
+                {isReply ? <Reply className="w-3.5 h-3.5 text-primary" /> : <Mail className="w-3.5 h-3.5 text-primary" />}
+                <span className="text-xs font-medium">{isReply ? "Reply" : "Compose"}</span>
                 {myName && (
                     <span className="text-[10px] text-muted-foreground ml-auto">
                         from: {myName}@{MAIL_DOMAIN}
@@ -575,7 +655,7 @@ function SettingsViewExt({
     );
 }
 
-function ThreadMessageExt({
+function ThreadMessage({
     item,
     isLatest,
     defaultExpanded,
@@ -622,10 +702,12 @@ function ThreadMessageExt({
                         <span className={`text-[11px] font-medium truncate ${isLatest ? "text-foreground" : "text-muted-foreground"}`}>
                             {message.senderName || "Unknown"}
                         </span>
-                        {message.signatureValid ? (
+                        {message.signatureValid === true ? (
                             <CheckCircle2 className="w-2.5 h-2.5 text-success flex-shrink-0" />
-                        ) : (
+                        ) : message.signatureValid === false ? (
                             <XCircle className="w-2.5 h-2.5 text-destructive flex-shrink-0" />
+                        ) : (
+                            <ShieldQuestion className="w-2.5 h-2.5 text-muted-foreground flex-shrink-0" />
                         )}
                     </div>
                     <p className="text-[9px] text-muted-foreground">{formatDate(message.createdAt)}</p>
@@ -669,9 +751,9 @@ function ReadView({
     const handleTrash = async () => {
         try {
             if (folder === "trash") {
-                await deleteMail(wallet.id, message.id);
+                await deleteMail(wallet, message.id);
             } else {
-                await moveMail(wallet.id, message.id, "trash");
+                await moveMail(wallet, message.id, "trash");
             }
             onBack();
         } catch (err) {
@@ -681,7 +763,7 @@ function ReadView({
 
     const handleRestore = async () => {
         try {
-            await moveMail(wallet.id, message.id, "inbox");
+            await moveMail(wallet, message.id, "inbox");
             onBack();
         } catch (err) {
             console.error("Failed to restore:", err);
@@ -701,7 +783,7 @@ function ReadView({
                         {message.subject || "(No subject)"}
                     </p>
                     {hasThread && (
-                        <p className="text-[9px] text-muted-foreground">{thread.length} messages</p>
+                        <p className="text-[9px] text-muted-foreground">{thread.length} messages in thread</p>
                     )}
                 </div>
                 <div className="flex items-center gap-1">
@@ -728,7 +810,7 @@ function ReadView({
                 {hasThread ? (
                     <div>
                         {thread.map((threadItem, idx) => (
-                            <ThreadMessageExt
+                            <ThreadMessage
                                 key={threadItem.message.id}
                                 item={threadItem}
                                 isLatest={threadItem.message.id === item.message.id}
@@ -742,7 +824,7 @@ function ReadView({
                             <div className="w-8 h-8 rounded-full bg-primary/20 flex items-center justify-center">
                                 <AtSign className="w-4 h-4 text-primary" />
                             </div>
-                            <div className="min-w-0">
+                            <div className="min-w-0 flex-1">
                                 <p className="text-xs font-medium text-foreground truncate">
                                     {message.senderName || "Unknown"}
                                 </p>
@@ -750,10 +832,12 @@ function ReadView({
                                     {formatDate(message.createdAt)}
                                 </p>
                             </div>
-                            {message.signatureValid ? (
+                            {message.signatureValid === true ? (
                                 <CheckCircle2 className="w-3.5 h-3.5 text-success ml-auto flex-shrink-0" />
-                            ) : (
+                            ) : message.signatureValid === false ? (
                                 <XCircle className="w-3.5 h-3.5 text-destructive ml-auto flex-shrink-0" />
+                            ) : (
+                                <ShieldQuestion className="w-3.5 h-3.5 text-muted-foreground ml-auto flex-shrink-0" />
                             )}
                         </div>
 
@@ -772,7 +856,7 @@ function ReadView({
                 )}
 
                 <div className="px-3 pb-1 flex items-center gap-1 text-[10px] text-muted-foreground">
-                    <CheckCircle2 className="w-2.5 h-2.5" />
+                    <Lock className="w-2.5 h-2.5" />
                     ML-KEM-768 + ML-DSA-65 encrypted
                 </div>
             </div>

@@ -25,6 +25,7 @@ import {
     type Conversation,
     type Message,
     type MessageType,
+    markConversationRead,
     type Wallet,
     type WalletWithPrivateKeys,
 } from "../../lib/pqc-messenger";
@@ -56,7 +57,7 @@ export default function MessengerTab({ wallet }: Props) {
     const messengerWallet = toMessengerWallet(wallet) as WalletWithPrivateKeys;
 
     const loadConversations = async () => {
-        const convos = await getConversations(wallet.id);
+        const convos = await getConversations(wallet.id, messengerWallet);
         setConversations(convos);
         setIsLoading(false);
     };
@@ -74,12 +75,7 @@ export default function MessengerTab({ wallet }: Props) {
         setRegStatus("pending");
         setRegError(null);
         try {
-            await registerWalletOnNode({
-                id: wallet.id,
-                displayName: wallet.displayName,
-                signingPublicKey: wallet.signingPublicKey,
-                encryptionPublicKey: wallet.encryptionPublicKey,
-            });
+            await registerWalletOnNode(messengerWallet);
             setRegStatus("ok");
         } catch (err: any) {
             setRegStatus("error");
@@ -142,12 +138,7 @@ export default function MessengerTab({ wallet }: Props) {
                                 await chrome.storage.local.set({ [storageKey]: JSON.stringify(updated) });
                                 // Also update the in-memory cache
                                 saveUnifiedWallet(updated);
-                                await registerWalletOnNode({
-                                    id: updated.id,
-                                    displayName: updated.displayName,
-                                    signingPublicKey: updated.signingPublicKey,
-                                    encryptionPublicKey: updated.encryptionPublicKey,
-                                });
+                                await registerWalletOnNode(toMessengerWallet(updated) as WalletWithPrivateKeys);
                                 setRegStatus("ok");
                                 setRegError(null);
                                 // Now safe to reload since storage write completed
@@ -169,12 +160,7 @@ export default function MessengerTab({ wallet }: Props) {
                             const next = !discoverable;
                             setDiscoverable(next);
                             savePrivacySettings({ discoverable: next });
-                            await registerWalletOnNode({
-                                id: wallet.id,
-                                displayName: wallet.displayName,
-                                signingPublicKey: wallet.signingPublicKey,
-                                encryptionPublicKey: wallet.encryptionPublicKey,
-                            });
+                            await registerWalletOnNode(messengerWallet);
                         }}
                         className={`w-7 h-7 rounded-lg flex items-center justify-center transition-colors ${
                             discoverable
@@ -220,9 +206,8 @@ export default function MessengerTab({ wallet }: Props) {
                                 onClick={async () => {
                                     try {
                                         const convo = await createConversation(
-                                            wallet.id,
+                                            messengerWallet,
                                             [wallet.id, c.id],
-                                            c.displayName
                                         );
                                         setConversations(prev => [convo, ...prev]);
                                         setSelected(convo);
@@ -290,7 +275,7 @@ export default function MessengerTab({ wallet }: Props) {
                                         e.stopPropagation();
                                         if (!confirm("Delete this conversation?")) return;
                                         try {
-                                            await deleteConversation(convo.id);
+                                            await deleteConversation(messengerWallet, convo.id);
                                             setConversations(prev => prev.filter(c => c.id !== convo.id));
                                         } catch (err) { console.error("Delete failed:", err); }
                                     }}
@@ -326,6 +311,7 @@ function ChatView({
     const [isLoading, setIsLoading] = useState(true);
     const [stagedMedia, setStagedMedia] = useState<{ file: File; previewUrl: string } | null>(null);
     const [spoiler, setSpoiler] = useState(false);
+    const [selfDestruct, setSelfDestruct] = useState(false);
     const [resolvedRecipient, setResolvedRecipient] = useState<Wallet | null>(null);
     const fileInputRef = useRef<HTMLInputElement>(null);
     const messagesEndRef = useRef<HTMLDivElement>(null);
@@ -388,6 +374,7 @@ function ChatView({
                     return m;
                 });
             });
+            markConversationRead(wallet, conversation.id, msgs).catch(() => {});
         } catch (err) { console.error(err); }
         setIsLoading(false);
     };
@@ -472,7 +459,7 @@ function ChatView({
             }
             const msg = await sendMessage(
                 conversation.id, textToSend, wallet, recipientKey,
-                false, undefined, msgType, spoiler
+                selfDestruct, selfDestruct ? 30 : undefined, msgType, spoiler
             );
             setMessages(prev => [...prev, msg]);
         } catch (err: any) {
@@ -481,6 +468,7 @@ function ChatView({
         }
         setIsSending(false);
         setSpoiler(false);
+        setSelfDestruct(false);
     };
 
     return (
@@ -569,7 +557,7 @@ function ChatView({
                     </div>
                 )}
 
-                {/* Spoiler toggle */}
+                {/* Spoiler + self-destruct toggles */}
                 <div className="px-2 pt-1.5 flex items-center gap-1.5">
                     <button
                         onClick={() => setSpoiler(!spoiler)}
@@ -580,6 +568,17 @@ function ChatView({
                     >
                         <EyeOff className="w-3 h-3" />
                         Spoiler
+                    </button>
+                    <button
+                        onClick={() => setSelfDestruct(!selfDestruct)}
+                        className={`flex items-center gap-1 px-2 py-0.5 rounded text-[10px] transition-colors ${selfDestruct
+                            ? "bg-destructive/20 text-destructive"
+                            : "text-muted-foreground hover:text-foreground"
+                            }`}
+                        title="Message deletes 30s after recipient opens it"
+                    >
+                        <Timer className="w-3 h-3" />
+                        {selfDestruct ? "30s" : "Self-destruct"}
                     </button>
                 </div>
 
@@ -693,10 +692,12 @@ function MessageBubble({ msg, isOwn }: { msg: Message; isOwn: boolean }) {
                     <span className="opacity-50">{formatTime(msg.createdAt)}</span>
                     {msg.spoiler && <EyeOff className="w-2.5 h-2.5 opacity-50" />}
                     {msg.selfDestruct && <Timer className="w-2.5 h-2.5 text-destructive" />}
-                    {msg.signatureValid ? (
+                    {msg.signatureValid === true ? (
                         <CheckCircle2 className="w-2.5 h-2.5 text-success" />
-                    ) : (
+                    ) : msg.signatureValid === false ? (
                         <XCircle className="w-2.5 h-2.5 text-destructive" />
+                    ) : (
+                        <Shield className="w-2.5 h-2.5 text-muted-foreground opacity-50" />
                     )}
                 </div>
             </div>

@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useCallback, useRef } from "react";
 import { Wallet, Coins, Image, MessageCircle, Mail, Settings, Lock, MoreVertical, ExternalLink, Copy, Check } from "lucide-react";
 import { initStorage } from "../lib/storage";
 import {
@@ -8,6 +8,10 @@ import {
     unlockUnifiedWallet,
     type UnifiedWallet,
 } from "../lib/unified-wallet";
+import { toMessengerWallet } from "../lib/unified-wallet";
+import { getTotalUnreadCount } from "../lib/pqc-messenger";
+import type { WalletWithPrivateKeys } from "../lib/pqc-messenger";
+import { getUnreadMailCount } from "../lib/pqc-mail";
 import WalletTab from "./tabs/WalletTab";
 import TokensTab from "./tabs/TokensTab";
 import NftsTab from "./tabs/NftsTab";
@@ -30,6 +34,9 @@ export default function App() {
     const [showMenu, setShowMenu] = useState(false);
     const [copied, setCopied] = useState(false);
     const [rougeAddress, setRougeAddress] = useState("");
+    const [unreadChats, setUnreadChats] = useState(0);
+    const [unreadMail, setUnreadMail] = useState(0);
+    const unreadIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
     useEffect(() => {
         (async () => {
@@ -48,6 +55,36 @@ export default function App() {
             pubkeyToAddress(wallet.signingPublicKey).then(setRougeAddress).catch(() => {});
         }
     }, [wallet?.signingPublicKey]);
+
+    const pollUnread = useCallback(async () => {
+        if (!wallet) return;
+        try {
+            const mw = toMessengerWallet(wallet) as WalletWithPrivateKeys;
+            const [chatCount, mailCount] = await Promise.all([
+                getTotalUnreadCount(mw).catch(() => 0),
+                getUnreadMailCount(mw).catch(() => 0),
+            ]);
+            setUnreadChats(chatCount);
+            setUnreadMail(mailCount);
+            const totalBadge = chatCount + mailCount;
+            try {
+                if (typeof chrome !== "undefined" && chrome.action?.setBadgeText) {
+                    chrome.action.setBadgeText({ text: totalBadge > 0 ? String(totalBadge) : "" });
+                    chrome.action.setBadgeBackgroundColor({ color: "#00CEB6" });
+                }
+                chrome.runtime?.sendMessage?.({ type: "messages-read", unread: totalBadge });
+            } catch { /* not in extension context */ }
+        } catch { /* ignore */ }
+    }, [wallet]);
+
+    useEffect(() => {
+        if (!wallet) return;
+        pollUnread();
+        unreadIntervalRef.current = setInterval(pollUnread, 15000);
+        return () => {
+            if (unreadIntervalRef.current) clearInterval(unreadIntervalRef.current);
+        };
+    }, [wallet, pollUnread]);
 
 
     if (!ready) {
@@ -198,23 +235,43 @@ export default function App() {
 
             {/* Bottom tab bar */}
             <div className="flex items-center border-t border-border tab-bar-glass">
-                {tabs.map(({ id, label, icon: Icon }) => (
-                    <button
-                        key={id}
-                        onClick={() => setActiveTab(id)}
-                        className={`flex-1 flex flex-col items-center gap-0.5 py-2.5 transition-all duration-200 relative ${
-                            activeTab === id
-                                ? "text-primary"
-                                : "text-muted-foreground hover:text-foreground"
-                        }`}
-                    >
-                        {activeTab === id && (
-                            <div className="absolute top-0 left-1/2 -translate-x-1/2 w-10 h-0.5 rounded-full bg-primary shadow-sm shadow-primary/50" />
-                        )}
-                        <Icon className={`w-4 h-4 transition-transform duration-200 ${activeTab === id ? "scale-110" : ""}`} />
-                        <span className={`text-[10px] ${activeTab === id ? "font-semibold" : "font-medium"}`}>{label}</span>
-                    </button>
-                ))}
+                {tabs.map(({ id, label, icon: Icon }) => {
+                    const badge = id === "messenger" ? unreadChats : id === "mail" ? unreadMail : 0;
+                    const tooltip =
+                        id === "messenger" && badge > 0
+                            ? `${badge} unread message${badge > 1 ? "s" : ""}`
+                        : id === "mail" && badge > 0
+                            ? `${badge} unread email${badge > 1 ? "s" : ""}`
+                        : label;
+                    return (
+                        <button
+                            key={id}
+                            onClick={() => {
+                                setActiveTab(id);
+                                if (id === "messenger" || id === "mail") setTimeout(pollUnread, 2000);
+                            }}
+                            title={tooltip}
+                            className={`flex-1 flex flex-col items-center gap-0.5 py-2.5 transition-all duration-200 relative ${
+                                activeTab === id
+                                    ? "text-primary"
+                                    : "text-muted-foreground hover:text-foreground"
+                            }`}
+                        >
+                            {activeTab === id && (
+                                <div className="absolute top-0 left-1/2 -translate-x-1/2 w-10 h-0.5 rounded-full bg-primary shadow-sm shadow-primary/50" />
+                            )}
+                            <div className="relative">
+                                <Icon className={`w-4 h-4 transition-transform duration-200 ${activeTab === id ? "scale-110" : ""}`} />
+                                {badge > 0 && (
+                                    <span className="absolute -top-1.5 -right-2.5 min-w-[14px] h-[14px] flex items-center justify-center rounded-full bg-primary text-primary-foreground text-[8px] font-bold px-0.5 leading-none shadow-sm shadow-primary/40">
+                                        {badge > 99 ? "99+" : badge}
+                                    </span>
+                                )}
+                            </div>
+                            <span className={`text-[10px] ${activeTab === id ? "font-semibold" : "font-medium"}`}>{label}</span>
+                        </button>
+                    );
+                })}
             </div>
         </div>
     );

@@ -203,18 +203,23 @@ export default function WalletTab({ wallet }: Props) {
                     </div>
                 </div>
 
-                {/* Shielded balance badge */}
-                {shieldedStats && shieldedStats.active_notes > 0 && (
-                    <div className="inline-flex items-center gap-1.5 px-2 py-1 rounded-full bg-primary/10 border border-primary/20 mb-3">
-                        <Shield className="w-3 h-3 text-primary" />
-                        <span className="text-[10px] text-primary font-semibold">
-                            {getShieldedBalance(wallet.signingPublicKey) > 0 
-                              ? `${getShieldedBalance(wallet.signingPublicKey).toLocaleString()} XRGE shielded`
-                              : `${shieldedStats.active_notes} shielded note${shieldedStats.active_notes !== 1 ? 's' : ''}`
-                            }
-                        </span>
-                    </div>
-                )}
+                {/* Shielded balance badge (per-wallet, not global) */}
+                {(() => {
+                    const myNotes = getActiveNotes(wallet.signingPublicKey);
+                    const myBalance = myNotes.reduce((s, n) => s + n.value, 0);
+                    if (myNotes.length === 0) return null;
+                    return (
+                        <div className="inline-flex items-center gap-1.5 px-2 py-1 rounded-full bg-primary/10 border border-primary/20 mb-3">
+                            <Shield className="w-3 h-3 text-primary" />
+                            <span className="text-[10px] text-primary font-semibold">
+                                {myBalance > 0
+                                    ? `${myBalance.toLocaleString()} XRGE shielded`
+                                    : `${myNotes.length} shielded note${myNotes.length !== 1 ? 's' : ''}`
+                                }
+                            </span>
+                        </div>
+                    );
+                })()}
 
                 {/* Action buttons — 3 + 2 grid */}
                 <div className="space-y-2 mt-3">
