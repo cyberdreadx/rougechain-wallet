@@ -246,10 +246,10 @@ export default function WalletTab({ wallet }: Props) {
                         </button>
                         <button
                             onClick={copyAddress}
-                            className="flex flex-col items-center gap-1 py-2.5 rounded-xl bg-secondary text-secondary-foreground font-semibold hover:bg-secondary/80 active:scale-[0.96] transition-all"
+                            className={`flex flex-col items-center gap-1 py-2.5 rounded-xl font-semibold active:scale-[0.96] transition-all ${copied ? "bg-success/20 text-success" : "bg-secondary text-secondary-foreground hover:bg-secondary/80"}`}
                         >
-                            <Download className="w-4 h-4" />
-                            <span className="text-[10px]">Receive</span>
+                            {copied ? <Check className="w-4 h-4" /> : <Download className="w-4 h-4" />}
+                            <span className="text-[10px]">{copied ? "Copied!" : "Receive"}</span>
                         </button>
                         <button
                             onClick={handleFaucet}

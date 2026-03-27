@@ -428,7 +428,7 @@ function saveConnectedSites(sites: ConnectedSite[]): Promise<void> {
     });
 }
 
-function getWalletData(): Promise<{ publicKey: string; privateKey: string } | null> {
+function getWalletData(): Promise<{ publicKey: string; privateKey: string; displayName: string; encryptionPublicKey: string } | null> {
     return new Promise((resolve) => {
         chrome.storage.local.get("pqc-unified-wallet", (data) => {
             const raw = data["pqc-unified-wallet"];
@@ -438,6 +438,8 @@ function getWalletData(): Promise<{ publicKey: string; privateKey: string } | nu
                 resolve({
                     publicKey: wallet.signingPublicKey,
                     privateKey: wallet.signingPrivateKey,
+                    displayName: wallet.displayName || "",
+                    encryptionPublicKey: wallet.encryptionPublicKey || "",
                 });
             } catch { resolve(null); }
         });
@@ -582,7 +584,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
                         await saveConnectedSites(sites);
                     }
 
-                    sendResponse({ result: { publicKey: wallet.publicKey } });
+                    sendResponse({ result: { publicKey: wallet.publicKey, displayName: wallet.displayName, encryptionPublicKey: wallet.encryptionPublicKey } });
                     break;
                 }
 

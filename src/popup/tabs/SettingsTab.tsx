@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { Lock, LogOut, Globe, Clock, Download, Upload, Shield, ExternalLink, Copy } from "lucide-react";
+import { Lock, LogOut, Globe, Clock, Download, Upload, Shield, ExternalLink, Copy, Check, EyeOff } from "lucide-react";
 import type { UnifiedWallet } from "../../lib/unified-wallet";
 import {
     lockUnifiedWallet,
@@ -27,6 +27,9 @@ export default function SettingsTab({ wallet, onLock, onDisconnect }: Props) {
     const [network, setNetwork] = useState<NetworkType>(getActiveNetwork());
     const [autoLock, setAutoLock] = useState(getVaultSettings().autoLockMinutes);
     const [showExport, setShowExport] = useState(false);
+    const [seedExpanded, setSeedExpanded] = useState(false);
+    const [seedRevealed, setSeedRevealed] = useState(false);
+    const [seedCopied, setSeedCopied] = useState(false);
 
     const handleLock = async () => {
         if (!lockPassword) return;
@@ -168,25 +171,30 @@ export default function SettingsTab({ wallet, onLock, onDisconnect }: Props) {
             {/* Recovery Phrase */}
             {wallet.mnemonic && (
                 <div className="p-3 border-b border-border">
-                    <div className="flex items-center justify-between mb-2">
+                    <button
+                        onClick={() => { setSeedExpanded(!seedExpanded); if (seedExpanded) setSeedRevealed(false); }}
+                        className="flex items-center justify-between w-full"
+                    >
                         <div className="flex items-center gap-2">
                             <Shield className="w-3.5 h-3.5 text-warning" />
                             <span className="text-xs font-medium text-foreground">Recovery Phrase</span>
                         </div>
-                        <button
-                            onClick={() => setShowExport(!showExport)}
-                            className="text-[10px] text-primary hover:text-primary/80 transition-colors"
-                        >
-                            {showExport ? "Hide" : "Reveal"}
-                        </button>
-                    </div>
-                    {showExport ? (
-                        <div className="space-y-2">
-                            <div className="p-2.5 rounded-lg bg-warning/5 border border-warning/20">
-                                <p className="text-[10px] text-warning mb-2 font-medium">
-                                    ⚠ Never share your recovery phrase. Anyone with these words can access your wallet.
-                                </p>
-                                <div className="grid grid-cols-3 gap-1.5">
+                        <span className="text-[10px] text-muted-foreground">{seedExpanded ? "Collapse" : `${wallet.mnemonic.split(" ").length} words`}</span>
+                    </button>
+                    {seedExpanded && (
+                        <div className="mt-2 space-y-2">
+                            <div
+                                className="relative rounded-lg bg-warning/5 border border-warning/20 p-2.5 cursor-pointer select-none"
+                                onClick={() => !seedRevealed && setSeedRevealed(true)}
+                            >
+                                {!seedRevealed && (
+                                    <div className="absolute inset-0 rounded-lg bg-card/80 backdrop-blur-md flex flex-col items-center justify-center gap-1.5 z-10">
+                                        <EyeOff className="w-5 h-5 text-warning" />
+                                        <span className="text-[10px] font-medium text-warning">Tap to reveal</span>
+                                        <span className="text-[9px] text-muted-foreground">Make sure no one is watching</span>
+                                    </div>
+                                )}
+                                <div className={`grid grid-cols-3 gap-1.5 ${!seedRevealed ? "blur-lg" : ""} transition-all duration-300`}>
                                     {wallet.mnemonic.split(" ").map((word, i) => (
                                         <div key={i} className="flex items-center gap-1 px-2 py-1.5 rounded-md bg-background border border-border">
                                             <span className="text-[9px] text-muted-foreground w-4 text-right">{i + 1}.</span>
@@ -195,19 +203,23 @@ export default function SettingsTab({ wallet, onLock, onDisconnect }: Props) {
                                     ))}
                                 </div>
                             </div>
-                            <button
-                                onClick={() => {
-                                    navigator.clipboard.writeText(wallet.mnemonic!);
-                                }}
-                                className="w-full py-1.5 rounded-lg bg-secondary text-secondary-foreground text-xs font-medium hover:bg-secondary/80 transition-colors flex items-center justify-center gap-1.5"
-                            >
-                                <Copy className="w-3 h-3" /> Copy to Clipboard
-                            </button>
+                            {seedRevealed && (
+                                <button
+                                    onClick={() => {
+                                        navigator.clipboard.writeText(wallet.mnemonic!);
+                                        setSeedCopied(true);
+                                        setTimeout(() => setSeedCopied(false), 2000);
+                                    }}
+                                    className={`w-full py-1.5 rounded-lg text-xs font-medium transition-all flex items-center justify-center gap-1.5 ${
+                                        seedCopied
+                                            ? "bg-success/20 text-success"
+                                            : "bg-secondary text-secondary-foreground hover:bg-secondary/80"
+                                    }`}
+                                >
+                                    {seedCopied ? <><Check className="w-3 h-3" /> Copied!</> : <><Copy className="w-3 h-3" /> Copy to Clipboard</>}
+                                </button>
+                            )}
                         </div>
-                    ) : (
-                        <p className="text-[10px] text-muted-foreground">
-                            {wallet.mnemonic.split(" ").length} words · Tap "Reveal" to view
-                        </p>
                     )}
                 </div>
             )}

@@ -217,6 +217,29 @@ export interface TokenMeta {
     creator: string;
     image?: string;
     description?: string;
+    website?: string;
+    twitter?: string;
+    discord?: string;
+    created_at?: number;
+    frozen?: boolean;
+    mintable?: boolean;
+    max_supply?: number;
+    total_minted?: number;
+}
+
+export interface TokenHolder {
+    address: string;
+    balance: number;
+    percentage: number;
+}
+
+export interface TokenHoldersInfo {
+    success: boolean;
+    holders: TokenHolder[];
+    total_supply: number;
+    circulating_supply: number;
+    shielded_supply: number;
+    burned_supply: number;
 }
 
 export async function getTokens(): Promise<TokenMeta[]> {
@@ -230,6 +253,32 @@ export async function getTokens(): Promise<TokenMeta[]> {
             return data.tokens || [];
         });
     } catch { return []; }
+}
+
+export async function getTokenMetadata(symbol: string): Promise<TokenMeta | null> {
+    const baseUrl = getCoreApiBaseUrl();
+    if (!baseUrl) return null;
+    try {
+        const res = await fetch(`${baseUrl}/token/${encodeURIComponent(symbol)}/metadata`, {
+            headers: getCoreApiHeaders(),
+        });
+        if (!res.ok) return null;
+        const data = await res.json();
+        if (!data || data.error || !data.symbol) return null;
+        return data as TokenMeta;
+    } catch { return null; }
+}
+
+export async function getTokenHolders(symbol: string): Promise<TokenHoldersInfo | null> {
+    const baseUrl = getCoreApiBaseUrl();
+    if (!baseUrl) return null;
+    try {
+        const res = await fetch(`${baseUrl}/token/${encodeURIComponent(symbol)}/holders`, {
+            headers: getCoreApiHeaders(),
+        });
+        if (!res.ok) return null;
+        return await res.json() as TokenHoldersInfo;
+    } catch { return null; }
 }
 
 export interface NftCollection {

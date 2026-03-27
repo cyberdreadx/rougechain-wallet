@@ -69,8 +69,8 @@ window.addEventListener("message", (event) => {
 const rougechain = {
     isRougeChain: true,
 
-    async connect(): Promise<{ publicKey: string }> {
-        return sendRequest("connect") as Promise<{ publicKey: string }>;
+    async connect(): Promise<{ publicKey: string; displayName?: string; encryptionPublicKey?: string }> {
+        return sendRequest("connect") as Promise<{ publicKey: string; displayName?: string; encryptionPublicKey?: string }>;
     },
 
     async getBalance(): Promise<{ balance: number; tokens: Record<string, number> }> {

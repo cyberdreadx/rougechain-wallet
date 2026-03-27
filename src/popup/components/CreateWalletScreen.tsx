@@ -1,8 +1,9 @@
 import { useState } from "react";
-import { Loader2, Plus, Upload, KeyRound } from "lucide-react";
+import { Loader2, Plus, Upload, KeyRound, Eye, EyeOff, Copy, Check, ShieldAlert, ArrowRight } from "lucide-react";
 import { generateEncryptionKeypair, registerWalletOnNode } from "../../lib/pqc-messenger";
 import { saveUnifiedWallet, type UnifiedWallet } from "../../lib/unified-wallet";
 import { generateMnemonic, keypairFromMnemonic } from "../../lib/mnemonic";
+import { reverseLookup } from "../../lib/pqc-mail";
 
 interface Props {
     onCreated: (wallet: UnifiedWallet) => void;
@@ -13,12 +14,15 @@ export default function CreateWalletScreen({ onCreated }: Props) {
     const [isCreating, setIsCreating] = useState(false);
     const [showImport, setShowImport] = useState(false);
 
+    const [backupWallet, setBackupWallet] = useState<UnifiedWallet | null>(null);
+    const [seedRevealed, setSeedRevealed] = useState(false);
+    const [seedCopied, setSeedCopied] = useState(false);
+
     const handleCreate = async () => {
         if (!name.trim() || isCreating) return;
         setIsCreating(true);
 
         try {
-            // Generate BIP-39 mnemonic and derive ML-DSA-65 keys
             const mnemonic = generateMnemonic();
             const { publicKey, secretKey } = keypairFromMnemonic(mnemonic);
             const encKeypair = generateEncryptionKeypair();
@@ -38,7 +42,6 @@ export default function CreateWalletScreen({ onCreated }: Props) {
 
             saveUnifiedWallet(wallet);
 
-            // Register on node
             try {
                 await registerWalletOnNode({
                     id: wallet.id,
@@ -48,11 +51,18 @@ export default function CreateWalletScreen({ onCreated }: Props) {
                 });
             } catch { /* Node may be unavailable — that's okay */ }
 
-            onCreated(wallet);
+            setBackupWallet(wallet);
         } catch (err) {
             console.error("Wallet creation failed:", err);
         }
         setIsCreating(false);
+    };
+
+    const copySeed = () => {
+        if (!backupWallet?.mnemonic) return;
+        navigator.clipboard.writeText(backupWallet.mnemonic);
+        setSeedCopied(true);
+        setTimeout(() => setSeedCopied(false), 2000);
     };
 
     const handleImport = async (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -96,9 +106,18 @@ export default function CreateWalletScreen({ onCreated }: Props) {
             const { publicKey, secretKey } = recover(trimmed);
             const { generateEncryptionKeypair } = await import("../../lib/pqc-messenger");
             const encKeypair = generateEncryptionKeypair();
+
+            let resolvedName = name.trim();
+            if (!resolvedName) {
+                try {
+                    const nodeName = await reverseLookup(publicKey);
+                    if (nodeName) resolvedName = nodeName;
+                } catch { /* node may be unreachable */ }
+            }
+
             const wallet: UnifiedWallet = {
                 id: crypto.randomUUID(),
-                displayName: name.trim() || "Recovered Wallet",
+                displayName: resolvedName || "Recovered Wallet",
                 createdAt: Date.now(),
                 signingPublicKey: publicKey,
                 signingPrivateKey: secretKey,
@@ -115,6 +134,74 @@ export default function CreateWalletScreen({ onCreated }: Props) {
         }
         setIsRecovering(false);
     };
+
+    if (backupWallet) {
+        const words = backupWallet.mnemonic?.split(" ") || [];
+        return (
+            <div className="flex flex-col items-center h-full p-6 bg-background overflow-y-auto">
+                <ShieldAlert className="w-10 h-10 text-warning mb-3" />
+                <h1 className="text-lg font-bold text-foreground mb-1">Back Up Your Seed Phrase</h1>
+                <p className="text-[11px] text-muted-foreground text-center mb-4 max-w-xs">
+                    This is the <span className="text-warning font-semibold">only way</span> to recover your wallet.
+                    Write it down and store it somewhere safe. Never share it.
+                </p>
+
+                <div
+                    className="relative w-full max-w-xs rounded-xl border border-border bg-card p-3 cursor-pointer select-none"
+                    onClick={() => !seedRevealed && setSeedRevealed(true)}
+                >
+                    {!seedRevealed && (
+                        <div className="absolute inset-0 rounded-xl bg-card/80 backdrop-blur-md flex flex-col items-center justify-center gap-2 z-10">
+                            <EyeOff className="w-6 h-6 text-warning" />
+                            <span className="text-xs font-medium text-warning">Click to reveal</span>
+                            <span className="text-[10px] text-muted-foreground">Make sure no one is watching</span>
+                        </div>
+                    )}
+                    <div className={`grid grid-cols-3 gap-1.5 ${!seedRevealed ? "blur-lg" : ""} transition-all duration-300`}>
+                        {words.map((word, i) => (
+                            <div key={i} className="flex items-center gap-1 px-2 py-1 rounded-lg bg-secondary/50 text-[10px] font-mono">
+                                <span className="text-muted-foreground w-4 text-right">{i + 1}.</span>
+                                <span className="text-foreground">{word}</span>
+                            </div>
+                        ))}
+                    </div>
+                </div>
+
+                <div className="w-full max-w-xs space-y-2 mt-4">
+                    <button
+                        onClick={copySeed}
+                        disabled={!seedRevealed}
+                        className={`w-full py-2 rounded-xl text-sm font-medium flex items-center justify-center gap-2 transition-all ${
+                            seedCopied
+                                ? "bg-success/20 text-success"
+                                : seedRevealed
+                                    ? "bg-secondary text-secondary-foreground hover:bg-secondary/80"
+                                    : "bg-secondary/30 text-muted-foreground cursor-not-allowed"
+                        }`}
+                    >
+                        {seedCopied ? <><Check className="w-4 h-4" /> Copied to clipboard</> : <><Copy className="w-4 h-4" /> Copy Seed Phrase</>}
+                    </button>
+
+                    <button
+                        onClick={() => onCreated(backupWallet)}
+                        disabled={!seedRevealed}
+                        className={`w-full py-2.5 rounded-xl text-sm font-medium flex items-center justify-center gap-2 transition-all ${
+                            seedRevealed
+                                ? "bg-primary text-primary-foreground hover:bg-primary/90"
+                                : "bg-primary/30 text-primary-foreground/50 cursor-not-allowed"
+                        }`}
+                    >
+                        I've saved my seed phrase <ArrowRight className="w-4 h-4" />
+                    </button>
+                </div>
+
+                <p className="text-[9px] text-destructive/70 text-center mt-3 max-w-xs">
+                    If you lose this phrase, your wallet cannot be recovered.
+                    RougeChain cannot help you retrieve it.
+                </p>
+            </div>
+        );
+    }
 
     return (
         <div className="flex flex-col items-center justify-center h-full p-6 bg-background">
