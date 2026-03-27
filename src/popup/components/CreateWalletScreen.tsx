@@ -1,7 +1,7 @@
 import { useState } from "react";
-import { Loader2, Plus, Upload, KeyRound, Eye, EyeOff, Copy, Check, ShieldAlert, ArrowRight } from "lucide-react";
+import { Loader2, Plus, Upload, KeyRound, Eye, EyeOff, Copy, Check, ShieldAlert, ArrowRight, Lock } from "lucide-react";
 import { generateEncryptionKeypair, registerWalletOnNode } from "../../lib/pqc-messenger";
-import { saveUnifiedWallet, type UnifiedWallet } from "../../lib/unified-wallet";
+import { saveUnifiedWallet, lockUnifiedWallet, type UnifiedWallet } from "../../lib/unified-wallet";
 import { generateMnemonic, keypairFromMnemonic } from "../../lib/mnemonic";
 import { reverseLookup } from "../../lib/pqc-mail";
 
@@ -17,6 +17,13 @@ export default function CreateWalletScreen({ onCreated }: Props) {
     const [backupWallet, setBackupWallet] = useState<UnifiedWallet | null>(null);
     const [seedRevealed, setSeedRevealed] = useState(false);
     const [seedCopied, setSeedCopied] = useState(false);
+
+    // Password setup step
+    const [showPasswordStep, setShowPasswordStep] = useState(false);
+    const [password, setPassword] = useState("");
+    const [confirmPassword, setConfirmPassword] = useState("");
+    const [passwordError, setPasswordError] = useState("");
+    const [isLocking, setIsLocking] = useState(false);
 
     const handleCreate = async () => {
         if (!name.trim() || isCreating) return;
@@ -77,7 +84,8 @@ export default function CreateWalletScreen({ onCreated }: Props) {
                 return;
             }
             saveUnifiedWallet(wallet);
-            onCreated(wallet);
+            setBackupWallet(wallet);
+            setShowPasswordStep(true);
         } catch {
             alert("Failed to import wallet");
         }
@@ -127,7 +135,8 @@ export default function CreateWalletScreen({ onCreated }: Props) {
                 mnemonic: trimmed,
             };
             saveUnifiedWallet(wallet);
-            onCreated(wallet);
+            setBackupWallet(wallet);
+            setShowPasswordStep(true);
         } catch (err) {
             console.error("Recovery failed:", err);
             setSeedError("Recovery failed — please try again");
@@ -183,7 +192,7 @@ export default function CreateWalletScreen({ onCreated }: Props) {
                     </button>
 
                     <button
-                        onClick={() => onCreated(backupWallet)}
+                        onClick={() => setShowPasswordStep(true)}
                         disabled={!seedRevealed}
                         className={`w-full py-2.5 rounded-xl text-sm font-medium flex items-center justify-center gap-2 transition-all ${
                             seedRevealed
@@ -198,6 +207,79 @@ export default function CreateWalletScreen({ onCreated }: Props) {
                 <p className="text-[9px] text-destructive/70 text-center mt-3 max-w-xs">
                     If you lose this phrase, your wallet cannot be recovered.
                     RougeChain cannot help you retrieve it.
+                </p>
+            </div>
+        );
+    }
+
+    // ─── Password setup step ───
+    if (showPasswordStep && backupWallet) {
+        const handleSetPassword = async () => {
+            if (password.length < 6) {
+                setPasswordError("Password must be at least 6 characters");
+                return;
+            }
+            if (password !== confirmPassword) {
+                setPasswordError("Passwords don't match");
+                return;
+            }
+            setPasswordError("");
+            setIsLocking(true);
+            try {
+                saveUnifiedWallet(backupWallet);
+                await lockUnifiedWallet(password);
+                onCreated(backupWallet);
+            } catch (err) {
+                console.error("Failed to set password:", err);
+                setPasswordError("Failed to encrypt wallet");
+            }
+            setIsLocking(false);
+        };
+
+        return (
+            <div className="flex flex-col items-center justify-center h-full p-6 bg-background">
+                <Lock className="w-10 h-10 text-primary mb-3" />
+                <h1 className="text-lg font-bold text-foreground mb-1">Set a Password</h1>
+                <p className="text-[11px] text-muted-foreground text-center mb-6 max-w-xs">
+                    Your password encrypts the wallet on this device. You'll need it to unlock the extension.
+                </p>
+
+                <div className="w-full max-w-xs space-y-3">
+                    <input
+                        type="password"
+                        placeholder="Create password (min 6 characters)"
+                        value={password}
+                        onChange={e => { setPassword(e.target.value); setPasswordError(""); }}
+                        className="w-full px-4 py-2.5 rounded-xl bg-input border border-border text-sm text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-primary/50"
+                    />
+                    <input
+                        type="password"
+                        placeholder="Confirm password"
+                        value={confirmPassword}
+                        onChange={e => { setConfirmPassword(e.target.value); setPasswordError(""); }}
+                        onKeyDown={e => e.key === "Enter" && handleSetPassword()}
+                        className="w-full px-4 py-2.5 rounded-xl bg-input border border-border text-sm text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-primary/50"
+                    />
+
+                    {passwordError && (
+                        <p className="text-[10px] text-destructive text-center">{passwordError}</p>
+                    )}
+
+                    <button
+                        onClick={handleSetPassword}
+                        disabled={!password || !confirmPassword || isLocking}
+                        className="w-full py-2.5 rounded-xl bg-primary text-primary-foreground text-sm font-medium hover:bg-primary/90 disabled:opacity-50 transition-colors flex items-center justify-center gap-2"
+                    >
+                        {isLocking ? (
+                            <><Loader2 className="w-4 h-4 animate-spin" /> Encrypting...</>
+                        ) : (
+                            <><Lock className="w-4 h-4" /> Set Password & Continue</>
+                        )}
+                    </button>
+                </div>
+
+                <p className="text-[9px] text-muted-foreground text-center mt-4 max-w-xs">
+                    Your password is never sent anywhere. It's used locally to encrypt your private keys with AES-256-GCM.
                 </p>
             </div>
         );
