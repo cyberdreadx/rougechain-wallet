@@ -288,7 +288,7 @@ export function invalidateNfts(): void {
     invalidate("nftCollections");
 }
 
-// Send transaction via node API (server-side signing via tx/submit)
+// Send transaction via v2 signed endpoint (client-side signing)
 export async function sendTransaction(
     fromPrivateKey: string,
     fromPublicKey: string,
@@ -300,17 +300,22 @@ export async function sendTransaction(
     const baseUrl = getCoreApiBaseUrl();
     if (!baseUrl) throw new Error("Node not configured");
 
-    const res = await fetch(`${baseUrl}/tx/submit`, {
+    const { buildSignedRequest } = await import("./pqc-messenger");
+    const payload = {
+        type: "transfer",
+        from: fromPublicKey,
+        to: toPublicKey,
+        amount,
+        fee: BASE_TRANSFER_FEE,
+        token: symbol,
+        ...(memo ? { memo } : {}),
+    };
+    const signed = buildSignedRequest(fromPrivateKey, fromPublicKey, payload);
+
+    const res = await fetch(`${baseUrl}/v2/transfer`, {
         method: "POST",
         headers: { ...getCoreApiHeaders(), "Content-Type": "application/json" },
-        body: JSON.stringify({
-            fromPrivateKey,
-            fromPublicKey,
-            toPublicKey,
-            amount,
-            fee: BASE_TRANSFER_FEE,
-            ...(symbol !== "XRGE" ? { tokenSymbol: symbol } : {}),
-        }),
+        body: JSON.stringify(signed),
     });
 
     const text = await res.text();
@@ -326,7 +331,7 @@ export async function sendTransaction(
         return {
             index: 0,
             timestamp: Date.now(),
-            data: JSON.stringify({ type: "transfer", from: fromPublicKey, to: toPublicKey, amount }),
+            data: JSON.stringify({ type: "transfer", from: fromPublicKey, to: toPublicKey, amount, token: symbol }),
             previousHash: "",
             hash: data.txId || "",
             nonce: 0,

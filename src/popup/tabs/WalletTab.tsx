@@ -57,6 +57,7 @@ export default function WalletTab({ wallet }: Props) {
     const [sendTo, setSendTo] = useState("");
     const [sendAmount, setSendAmount] = useState("");
     const [sendMemo, setSendMemo] = useState("");
+    const [sendToken, setSendToken] = useState("XRGE");
     const [isSending, setIsSending] = useState(false);
     const [showShield, setShowShield] = useState(false);
     const [shieldAmount, setShieldAmount] = useState("");
@@ -132,6 +133,16 @@ export default function WalletTab({ wallet }: Props) {
 
     const handleSend = async () => {
         if (!sendTo || !sendAmount || isSending) return;
+        const amt = parseFloat(sendAmount);
+        if (isNaN(amt) || amt <= 0) { showToast("Invalid amount"); return; }
+
+        const tokenBal = balances.find(b => b.symbol === sendToken)?.balance || 0;
+        if (amt > tokenBal) { showToast(`Insufficient ${sendToken} balance (have ${tokenBal.toLocaleString()})`); return; }
+        if (sendToken !== "XRGE") {
+            const xrgeBal = balances.find(b => b.symbol === "XRGE")?.balance || 0;
+            if (xrgeBal < 1) { showToast("Need at least 1 XRGE for fee"); return; }
+        }
+
         setIsSending(true);
         try {
             const { sendTransaction } = await import("../../lib/pqc-wallet");
@@ -139,14 +150,16 @@ export default function WalletTab({ wallet }: Props) {
                 wallet.signingPrivateKey,
                 wallet.signingPublicKey,
                 sendTo,
-                parseFloat(sendAmount),
-                TOKEN_SYMBOL,
+                amt,
+                sendToken,
                 sendMemo || undefined
             );
             setShowSend(false);
             setSendTo("");
             setSendAmount("");
             setSendMemo("");
+            setSendToken("XRGE");
+            showToast(`Sent ${amt} ${sendToken}`, "success");
             await refreshData();
         } catch (err: any) {
             console.error("Send failed:", err);
@@ -269,6 +282,19 @@ export default function WalletTab({ wallet }: Props) {
             {/* Send form */}
             {showSend && (
                 <div className="p-3 border-b border-border bg-card/80 space-y-2">
+                    {balances.filter(b => b.balance > 0).length > 1 && (
+                        <select
+                            value={sendToken}
+                            onChange={e => setSendToken(e.target.value)}
+                            className="w-full px-3 py-2 rounded-lg bg-input border border-border text-xs text-foreground focus:outline-none focus:ring-1 focus:ring-primary"
+                        >
+                            {balances.filter(b => b.balance > 0).map(b => (
+                                <option key={b.symbol} value={b.symbol}>
+                                    {b.symbol} ({b.balance.toLocaleString(undefined, { maximumFractionDigits: 4 })})
+                                </option>
+                            ))}
+                        </select>
+                    )}
                     <input
                         type="text"
                         placeholder="Recipient address"
@@ -292,12 +318,16 @@ export default function WalletTab({ wallet }: Props) {
                             className="flex-1 px-3 py-2 rounded-lg bg-input border border-border text-xs text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-1 focus:ring-primary"
                         />
                     </div>
+                    <p className="text-[10px] text-muted-foreground">
+                        Available: {(balances.find(b => b.symbol === sendToken)?.balance || 0).toLocaleString(undefined, { maximumFractionDigits: 4 })} {sendToken}
+                        {sendToken !== "XRGE" && " · Fee: 1 XRGE"}
+                    </p>
                     <button
                         onClick={handleSend}
                         disabled={!sendTo || !sendAmount || isSending}
                         className="w-full py-2 rounded-lg bg-primary text-primary-foreground text-xs font-medium hover:bg-primary/90 disabled:opacity-50 transition-colors"
                     >
-                        {isSending ? "Signing & Sending..." : `Send ${TOKEN_SYMBOL}`}
+                        {isSending ? "Signing & Sending..." : `Send ${sendToken}`}
                     </button>
                 </div>
             )}

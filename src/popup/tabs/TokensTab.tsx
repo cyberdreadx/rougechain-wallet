@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback } from "react";
-import { Coins, Plus, RefreshCw, Check, Loader2 } from "lucide-react";
+import { Coins, Plus, RefreshCw, Check, Loader2, Search, Download } from "lucide-react";
 import type { UnifiedWallet } from "../../lib/unified-wallet";
 import { getCoreApiBaseUrl, getCoreApiHeaders } from "../../lib/network";
 import {
@@ -11,6 +11,18 @@ import {
 } from "../../lib/pqc-wallet";
 import { invalidate } from "../../lib/api-cache";
 
+const IMPORTED_TOKENS_KEY = "rougechain_imported_tokens";
+
+function getImportedTokens(): string[] {
+    try {
+        return JSON.parse(localStorage.getItem(IMPORTED_TOKENS_KEY) || "[]");
+    } catch { return []; }
+}
+
+function saveImportedTokens(symbols: string[]) {
+    localStorage.setItem(IMPORTED_TOKENS_KEY, JSON.stringify(symbols));
+}
+
 interface Props {
     wallet: UnifiedWallet;
 }
@@ -18,8 +30,13 @@ interface Props {
 export default function TokensTab({ wallet }: Props) {
     const [balances, setBalances] = useState<WalletBalance[]>([]);
     const [allTokens, setAllTokens] = useState<TokenMeta[]>([]);
+    const [importedSymbols, setImportedSymbols] = useState<string[]>(getImportedTokens());
     const [isLoading, setIsLoading] = useState(true);
     const [showCreate, setShowCreate] = useState(false);
+    const [showImport, setShowImport] = useState(false);
+    const [importSymbol, setImportSymbol] = useState("");
+    const [importStatus, setImportStatus] = useState<string | null>(null);
+    const [importLoading, setImportLoading] = useState(false);
     const [tokenName, setTokenName] = useState("");
     const [tokenSymbol, setTokenSymbol] = useState("");
     const [tokenSupply, setTokenSupply] = useState("");
@@ -84,14 +101,63 @@ export default function TokensTab({ wallet }: Props) {
         setIsCreating(false);
     };
 
+    const handleImportToken = async () => {
+        const sym = importSymbol.trim().toUpperCase();
+        if (!sym || importLoading) return;
+        if (importedSymbols.includes(sym)) {
+            setImportStatus("Already imported");
+            return;
+        }
+        setImportLoading(true);
+        setImportStatus(null);
+        try {
+            const found = allTokens.find(t => t.symbol.toUpperCase() === sym);
+            if (!found) {
+                const baseUrl = getCoreApiBaseUrl();
+                const res = await fetch(`${baseUrl}/token/${encodeURIComponent(sym)}/metadata`, {
+                    headers: getCoreApiHeaders(),
+                });
+                if (!res.ok) {
+                    setImportStatus("Token not found on chain");
+                    setImportLoading(false);
+                    return;
+                }
+            }
+            const updated = [...importedSymbols, sym];
+            setImportedSymbols(updated);
+            saveImportedTokens(updated);
+            setImportStatus(`Imported ${sym}`);
+            setImportSymbol("");
+            setTimeout(() => { setImportStatus(null); setShowImport(false); refresh(); }, 1500);
+        } catch {
+            setImportStatus("Failed to verify token");
+        }
+        setImportLoading(false);
+    };
+
+    const handleRemoveImported = (sym: string) => {
+        const updated = importedSymbols.filter(s => s !== sym);
+        setImportedSymbols(updated);
+        saveImportedTokens(updated);
+    };
+
     const myTokens = balances.filter(b => b.balance > 0);
+    const importedWithBalance = importedSymbols
+        .filter(sym => !myTokens.some(t => t.symbol.toUpperCase() === sym))
+        .map(sym => {
+            const meta = allTokens.find(t => t.symbol.toUpperCase() === sym);
+            return { symbol: sym, name: meta?.name || sym, balance: 0, icon: sym[0] };
+        });
 
     return (
         <div className="flex flex-col h-full overflow-hidden">
             <div className="flex items-center justify-between px-4 py-3 border-b border-border">
                 <span className="text-sm font-semibold text-foreground">Tokens</span>
                 <div className="flex items-center gap-2">
-                    <button onClick={() => setShowCreate(!showCreate)} className="text-primary hover:text-primary/80">
+                    <button onClick={() => { setShowImport(!showImport); setShowCreate(false); }} title="Import Token" className="text-primary hover:text-primary/80">
+                        <Download className="w-4 h-4" />
+                    </button>
+                    <button onClick={() => { setShowCreate(!showCreate); setShowImport(false); }} title="Create Token" className="text-primary hover:text-primary/80">
                         <Plus className="w-4 h-4" />
                     </button>
                     <button onClick={() => refresh()} className="text-muted-foreground hover:text-primary">
@@ -103,6 +169,31 @@ export default function TokensTab({ wallet }: Props) {
             {createResult && (
                 <div className={`px-4 py-2 text-xs ${createResult.startsWith("Error") ? "bg-destructive/10 text-destructive" : "bg-success/10 text-success"}`}>
                     {createResult}
+                </div>
+            )}
+
+            {showImport && (
+                <div className="p-3 border-b border-border bg-card/80 space-y-2">
+                    <p className="text-xs font-medium text-foreground">Import Custom Token</p>
+                    <p className="text-[10px] text-muted-foreground">Enter the symbol of a token on RougeChain to track it in your wallet.</p>
+                    <input
+                        placeholder="Token symbol (e.g. MTK)"
+                        value={importSymbol}
+                        onChange={e => setImportSymbol(e.target.value.toUpperCase())}
+                        maxLength={20}
+                        onKeyDown={e => e.key === "Enter" && handleImportToken()}
+                        className="w-full px-3 py-2 rounded-lg bg-input border border-border text-xs text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-1 focus:ring-primary"
+                    />
+                    {importStatus && (
+                        <p className={`text-[10px] ${importStatus.startsWith("Imported") ? "text-green-500" : "text-destructive"}`}>{importStatus}</p>
+                    )}
+                    <button
+                        onClick={handleImportToken}
+                        disabled={!importSymbol.trim() || importLoading}
+                        className="w-full py-2 rounded-lg bg-primary text-primary-foreground text-xs font-medium hover:bg-primary/90 disabled:opacity-50"
+                    >
+                        {importLoading ? <Loader2 className="w-3.5 h-3.5 animate-spin mx-auto" /> : "Import Token"}
+                    </button>
                 </div>
             )}
 
@@ -175,19 +266,29 @@ export default function TokensTab({ wallet }: Props) {
                     )}
                 </div>
 
-                {allTokens.length > 0 && (
+                {importedWithBalance.length > 0 && (
                     <div className="px-3 py-2 border-t border-border">
-                        <p className="text-[10px] text-muted-foreground uppercase tracking-wider mb-2">All Tokens on Chain</p>
+                        <p className="text-[10px] text-muted-foreground uppercase tracking-wider mb-2">Imported Tokens</p>
                         <div className="space-y-1">
-                            {allTokens.map(t => (
+                            {importedWithBalance.map(t => (
                                 <div key={t.symbol} className="flex items-center justify-between py-2 px-3 rounded-lg hover:bg-secondary/30 transition-colors">
-                                    <div>
-                                        <p className="text-xs font-medium text-foreground">{t.symbol}</p>
-                                        <p className="text-[10px] text-muted-foreground">{t.name}</p>
+                                    <div className="flex items-center gap-2.5">
+                                        <div className="w-8 h-8 rounded-full bg-primary/10 flex items-center justify-center text-sm">
+                                            {t.icon}
+                                        </div>
+                                        <div>
+                                            <p className="text-xs font-medium text-foreground">{t.symbol}</p>
+                                            <p className="text-[10px] text-muted-foreground">{t.name}</p>
+                                        </div>
                                     </div>
-                                    <p className="text-[10px] text-muted-foreground font-mono">
-                                        {t.creator ? `${t.creator.slice(0, 6)}...` : ""}
-                                    </p>
+                                    <div className="flex items-center gap-2">
+                                        <span className="text-xs font-mono text-muted-foreground">0</span>
+                                        <button
+                                            onClick={() => handleRemoveImported(t.symbol)}
+                                            title="Remove"
+                                            className="text-muted-foreground hover:text-destructive text-[10px]"
+                                        >✕</button>
+                                    </div>
                                 </div>
                             ))}
                         </div>
