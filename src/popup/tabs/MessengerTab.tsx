@@ -624,6 +624,132 @@ function ChatView({
     );
 }
 
+type EmbedInfo = { type: "youtube" | "tiktok" | "x" | "instagram" | "spotify" | "soundcloud"; id: string; url: string };
+
+function detectEmbed(text: string): EmbedInfo | null {
+    const t = text.trim();
+    // YouTube
+    let m = t.match(/(?:youtube\.com\/watch\?.*v=|youtu\.be\/|youtube\.com\/shorts\/|youtube\.com\/embed\/)([a-zA-Z0-9_-]{11})/);
+    if (m) return { type: "youtube", id: m[1], url: t };
+    // TikTok
+    m = t.match(/tiktok\.com\/@[^/]+\/video\/(\d+)/);
+    if (m) return { type: "tiktok", id: m[1], url: t };
+    m = t.match(/(?:vm\.tiktok\.com|vt\.tiktok\.com)\/([a-zA-Z0-9]+)/);
+    if (m) return { type: "tiktok", id: m[1], url: t };
+    // X / Twitter
+    m = t.match(/(?:twitter\.com|x\.com)\/\w+\/status\/(\d+)/);
+    if (m) return { type: "x", id: m[1], url: t };
+    // Instagram post/reel
+    m = t.match(/instagram\.com\/(?:p|reel)\/([a-zA-Z0-9_-]+)/);
+    if (m) return { type: "instagram", id: m[1], url: t };
+    // Spotify track/album/playlist
+    m = t.match(/open\.spotify\.com\/(track|album|playlist|episode)\/([a-zA-Z0-9]+)/);
+    if (m) return { type: "spotify", id: `${m[1]}/${m[2]}`, url: t };
+    // SoundCloud
+    if (/soundcloud\.com\/[^/]+\/[^/\s]+/.test(t)) return { type: "soundcloud", id: "", url: t };
+    return null;
+}
+
+function EmbedCard({ embed, blurred }: { embed: EmbedInfo; blurred: boolean }) {
+    const blur = blurred ? "blur-xl" : "";
+    switch (embed.type) {
+        case "youtube":
+            return (
+                <iframe
+                    src={`https://www.youtube.com/embed/${embed.id}`}
+                    className={`w-full rounded aspect-video max-h-[140px] transition-all duration-300 ${blur}`}
+                    allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture"
+                    allowFullScreen style={{ border: "none" }}
+                />
+            );
+        case "tiktok":
+            return (
+                <a href={embed.url} target="_blank" rel="noopener noreferrer"
+                   className={`flex items-center gap-2 px-2 py-1.5 rounded-lg bg-black/20 border border-white/10 no-underline transition-all ${blur}`}>
+                    <div className="w-8 h-8 rounded-full bg-black flex items-center justify-center shrink-0">
+                        <span className="text-[10px] font-bold text-white">TT</span>
+                    </div>
+                    <div className="flex-1 min-w-0">
+                        <p className="text-[10px] font-semibold opacity-90">TikTok Video</p>
+                        <p className="text-[9px] opacity-50 truncate">{embed.url}</p>
+                    </div>
+                    <span className="text-[10px] opacity-60">▶</span>
+                </a>
+            );
+        case "x":
+            return (
+                <a href={embed.url} target="_blank" rel="noopener noreferrer"
+                   className={`flex items-center gap-2 px-2 py-1.5 rounded-lg bg-black/20 border border-white/10 no-underline transition-all ${blur}`}>
+                    <div className="w-8 h-8 rounded-full bg-black flex items-center justify-center shrink-0">
+                        <span className="text-sm font-bold text-white">𝕏</span>
+                    </div>
+                    <div className="flex-1 min-w-0">
+                        <p className="text-[10px] font-semibold opacity-90">Post on X</p>
+                        <p className="text-[9px] opacity-50 truncate">{embed.url}</p>
+                    </div>
+                    <span className="text-[10px] opacity-60">↗</span>
+                </a>
+            );
+        case "instagram":
+            return (
+                <a href={embed.url} target="_blank" rel="noopener noreferrer"
+                   className={`flex items-center gap-2 px-2 py-1.5 rounded-lg bg-gradient-to-r from-purple-900/20 to-pink-900/20 border border-pink-500/20 no-underline transition-all ${blur}`}>
+                    <div className="w-8 h-8 rounded-full bg-gradient-to-br from-purple-600 to-pink-500 flex items-center justify-center shrink-0">
+                        <span className="text-[10px] font-bold text-white">IG</span>
+                    </div>
+                    <div className="flex-1 min-w-0">
+                        <p className="text-[10px] font-semibold opacity-90">Instagram Post</p>
+                        <p className="text-[9px] opacity-50 truncate">{embed.url}</p>
+                    </div>
+                    <span className="text-[10px] opacity-60">↗</span>
+                </a>
+            );
+        case "spotify":
+            return (
+                <iframe
+                    src={`https://open.spotify.com/embed/${embed.id}?theme=0`}
+                    className={`w-full rounded-xl transition-all duration-300 ${blur}`}
+                    style={{ border: "none", height: 80 }}
+                    allow="encrypted-media"
+                />
+            );
+        case "soundcloud":
+            return (
+                <a href={embed.url} target="_blank" rel="noopener noreferrer"
+                   className={`flex items-center gap-2 px-2 py-1.5 rounded-lg bg-orange-900/20 border border-orange-500/20 no-underline transition-all ${blur}`}>
+                    <div className="w-8 h-8 rounded-full bg-orange-500 flex items-center justify-center shrink-0">
+                        <span className="text-[10px] font-bold text-white">SC</span>
+                    </div>
+                    <div className="flex-1 min-w-0">
+                        <p className="text-[10px] font-semibold opacity-90">SoundCloud</p>
+                        <p className="text-[9px] opacity-50 truncate">{embed.url}</p>
+                    </div>
+                    <span className="text-[10px] opacity-60">▶</span>
+                </a>
+            );
+        default:
+            return null;
+    }
+}
+
+function renderLinkedText(text: string): (string | JSX.Element)[] {
+    const urlRe = /(https?:\/\/[^\s]+)/g;
+    const parts: (string | JSX.Element)[] = [];
+    let last = 0;
+    let match: RegExpExecArray | null;
+    while ((match = urlRe.exec(text)) !== null) {
+        if (match.index > last) parts.push(text.slice(last, match.index));
+        const url = match[1];
+        parts.push(
+            <a key={match.index} href={url} target="_blank" rel="noopener noreferrer"
+               className="text-primary underline hover:text-primary/80 break-all">{url}</a>
+        );
+        last = match.index + url.length;
+    }
+    if (last < text.length) parts.push(text.slice(last));
+    return parts.length ? parts : [text];
+}
+
 // Compact message bubble with media + spoiler support
 function MessageBubble({ msg, isOwn }: { msg: Message; isOwn: boolean }) {
     const [revealed, setRevealed] = useState(false);
@@ -678,11 +804,23 @@ function MessageBubble({ msg, isOwn }: { msg: Message; isOwn: boolean }) {
                                     <p className="text-[9px] opacity-40 mt-0.5">{msg.mediaFileName}</p>
                                 )}
                             </div>
+                        ) : msg.plaintext && /^https?:\/\/\S+\.(gif|webp|png|jpe?g)(\?[^\s]*)?$/i.test(msg.plaintext.trim()) ? (
+                            <div className="my-1">
+                                <img
+                                    src={msg.plaintext.trim()}
+                                    alt="Image"
+                                    className={`max-w-full rounded max-h-[150px] object-contain transition-all duration-300 ${isSpoiler ? "blur-xl" : ""}`}
+                                />
+                            </div>
+                        ) : msg.plaintext && detectEmbed(msg.plaintext.trim()) ? (
+                            <div className="my-1">
+                                <EmbedCard embed={detectEmbed(msg.plaintext.trim())!} blurred={!!isSpoiler} />
+                            </div>
                         ) : (
                             <p className={`text-xs whitespace-pre-wrap break-words transition-all duration-300 ${isSpoiler ? "blur-md" : ""}`}>
                                 {msg.plaintext?.startsWith("[Unable") ? (
                                     <span className="italic opacity-60">{msg.plaintext}</span>
-                                ) : msg.plaintext}
+                                ) : renderLinkedText(msg.plaintext || "")}
                             </p>
                         )}
                     </div>

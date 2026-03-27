@@ -144,75 +144,7 @@ export default function CreateWalletScreen({ onCreated }: Props) {
         setIsRecovering(false);
     };
 
-    if (backupWallet) {
-        const words = backupWallet.mnemonic?.split(" ") || [];
-        return (
-            <div className="flex flex-col items-center h-full p-6 bg-background overflow-y-auto">
-                <ShieldAlert className="w-10 h-10 text-warning mb-3" />
-                <h1 className="text-lg font-bold text-foreground mb-1">Back Up Your Seed Phrase</h1>
-                <p className="text-[11px] text-muted-foreground text-center mb-4 max-w-xs">
-                    This is the <span className="text-warning font-semibold">only way</span> to recover your wallet.
-                    Write it down and store it somewhere safe. Never share it.
-                </p>
-
-                <div
-                    className="relative w-full max-w-xs rounded-xl border border-border bg-card p-3 cursor-pointer select-none"
-                    onClick={() => !seedRevealed && setSeedRevealed(true)}
-                >
-                    {!seedRevealed && (
-                        <div className="absolute inset-0 rounded-xl bg-card/80 backdrop-blur-md flex flex-col items-center justify-center gap-2 z-10">
-                            <EyeOff className="w-6 h-6 text-warning" />
-                            <span className="text-xs font-medium text-warning">Click to reveal</span>
-                            <span className="text-[10px] text-muted-foreground">Make sure no one is watching</span>
-                        </div>
-                    )}
-                    <div className={`grid grid-cols-3 gap-1.5 ${!seedRevealed ? "blur-lg" : ""} transition-all duration-300`}>
-                        {words.map((word, i) => (
-                            <div key={i} className="flex items-center gap-1 px-2 py-1 rounded-lg bg-secondary/50 text-[10px] font-mono">
-                                <span className="text-muted-foreground w-4 text-right">{i + 1}.</span>
-                                <span className="text-foreground">{word}</span>
-                            </div>
-                        ))}
-                    </div>
-                </div>
-
-                <div className="w-full max-w-xs space-y-2 mt-4">
-                    <button
-                        onClick={copySeed}
-                        disabled={!seedRevealed}
-                        className={`w-full py-2 rounded-xl text-sm font-medium flex items-center justify-center gap-2 transition-all ${
-                            seedCopied
-                                ? "bg-success/20 text-success"
-                                : seedRevealed
-                                    ? "bg-secondary text-secondary-foreground hover:bg-secondary/80"
-                                    : "bg-secondary/30 text-muted-foreground cursor-not-allowed"
-                        }`}
-                    >
-                        {seedCopied ? <><Check className="w-4 h-4" /> Copied to clipboard</> : <><Copy className="w-4 h-4" /> Copy Seed Phrase</>}
-                    </button>
-
-                    <button
-                        onClick={() => setShowPasswordStep(true)}
-                        disabled={!seedRevealed}
-                        className={`w-full py-2.5 rounded-xl text-sm font-medium flex items-center justify-center gap-2 transition-all ${
-                            seedRevealed
-                                ? "bg-primary text-primary-foreground hover:bg-primary/90"
-                                : "bg-primary/30 text-primary-foreground/50 cursor-not-allowed"
-                        }`}
-                    >
-                        I've saved my seed phrase <ArrowRight className="w-4 h-4" />
-                    </button>
-                </div>
-
-                <p className="text-[9px] text-destructive/70 text-center mt-3 max-w-xs">
-                    If you lose this phrase, your wallet cannot be recovered.
-                    RougeChain cannot help you retrieve it.
-                </p>
-            </div>
-        );
-    }
-
-    // ─── Password setup step ───
+    // ─── Password setup step (must be checked BEFORE seed backup screen) ───
     if (showPasswordStep && backupWallet) {
         const handleSetPassword = async () => {
             if (password.length < 6) {
@@ -280,6 +212,75 @@ export default function CreateWalletScreen({ onCreated }: Props) {
 
                 <p className="text-[9px] text-muted-foreground text-center mt-4 max-w-xs">
                     Your password is never sent anywhere. It's used locally to encrypt your private keys with AES-256-GCM.
+                </p>
+            </div>
+        );
+    }
+
+    // ─── Seed backup screen (only for NEW wallets, not imports) ───
+    if (backupWallet && !showPasswordStep) {
+        const words = backupWallet.mnemonic?.split(" ") || [];
+        return (
+            <div className="flex flex-col items-center h-full p-6 bg-background overflow-y-auto">
+                <ShieldAlert className="w-10 h-10 text-warning mb-3" />
+                <h1 className="text-lg font-bold text-foreground mb-1">Back Up Your Seed Phrase</h1>
+                <p className="text-[11px] text-muted-foreground text-center mb-4 max-w-xs">
+                    This is the <span className="text-warning font-semibold">only way</span> to recover your wallet.
+                    Write it down and store it somewhere safe. Never share it.
+                </p>
+
+                <div
+                    className="relative w-full max-w-xs rounded-xl border border-border bg-card p-3 cursor-pointer select-none"
+                    onClick={() => !seedRevealed && setSeedRevealed(true)}
+                >
+                    {!seedRevealed && (
+                        <div className="absolute inset-0 rounded-xl bg-card/80 backdrop-blur-md flex flex-col items-center justify-center gap-2 z-10">
+                            <EyeOff className="w-6 h-6 text-warning" />
+                            <span className="text-xs font-medium text-warning">Click to reveal</span>
+                            <span className="text-[10px] text-muted-foreground">Make sure no one is watching</span>
+                        </div>
+                    )}
+                    <div className={`grid grid-cols-3 gap-1.5 ${!seedRevealed ? "blur-lg" : ""} transition-all duration-300`}>
+                        {words.map((word, i) => (
+                            <div key={i} className="flex items-center gap-1 px-2 py-1 rounded-lg bg-secondary/50 text-[10px] font-mono">
+                                <span className="text-muted-foreground w-4 text-right">{i + 1}.</span>
+                                <span className="text-foreground">{word}</span>
+                            </div>
+                        ))}
+                    </div>
+                </div>
+
+                <div className="w-full max-w-xs space-y-2 mt-4">
+                    <button
+                        onClick={copySeed}
+                        disabled={!seedRevealed}
+                        className={`w-full py-2 rounded-xl text-sm font-medium flex items-center justify-center gap-2 transition-all ${
+                            seedCopied
+                                ? "bg-success/20 text-success"
+                                : seedRevealed
+                                    ? "bg-secondary text-secondary-foreground hover:bg-secondary/80"
+                                    : "bg-secondary/30 text-muted-foreground cursor-not-allowed"
+                        }`}
+                    >
+                        {seedCopied ? <><Check className="w-4 h-4" /> Copied to clipboard</> : <><Copy className="w-4 h-4" /> Copy Seed Phrase</>}
+                    </button>
+
+                    <button
+                        onClick={() => setShowPasswordStep(true)}
+                        disabled={!seedRevealed}
+                        className={`w-full py-2.5 rounded-xl text-sm font-medium flex items-center justify-center gap-2 transition-all ${
+                            seedRevealed
+                                ? "bg-primary text-primary-foreground hover:bg-primary/90"
+                                : "bg-primary/30 text-primary-foreground/50 cursor-not-allowed"
+                        }`}
+                    >
+                        I've saved my seed phrase <ArrowRight className="w-4 h-4" />
+                    </button>
+                </div>
+
+                <p className="text-[9px] text-destructive/70 text-center mt-3 max-w-xs">
+                    If you lose this phrase, your wallet cannot be recovered.
+                    RougeChain cannot help you retrieve it.
                 </p>
             </div>
         );

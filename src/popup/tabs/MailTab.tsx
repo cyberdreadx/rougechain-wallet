@@ -453,6 +453,7 @@ function ComposeView({
     const [isSending, setIsSending] = useState(false);
     const [error, setError] = useState<string | null>(null);
     const [resolvedTo, setResolvedTo] = useState<string | null>(null);
+    const [attachment, setAttachment] = useState<MailAttachment | null>(null);
 
     useEffect(() => {
         if (!to.trim()) {
@@ -465,6 +466,33 @@ function ComposeView({
         }, 500);
         return () => clearTimeout(timeout);
     }, [to]);
+
+    const pickAttachment = () => {
+        const input = document.createElement("input");
+        input.type = "file";
+        input.accept = "image/*";
+        input.onchange = async () => {
+            const file = input.files?.[0];
+            if (!file) return;
+            if (file.size > 2 * 1024 * 1024) {
+                setError("Attachment too large (max 2 MB)");
+                return;
+            }
+            const reader = new FileReader();
+            reader.onload = () => {
+                const base64 = (reader.result as string).split(",")[1];
+                setAttachment({
+                    name: file.name,
+                    type: file.type || "application/octet-stream",
+                    data: base64,
+                    size: file.size,
+                });
+                setError(null);
+            };
+            reader.readAsDataURL(file);
+        };
+        input.click();
+    };
 
     const handleSend = async () => {
         if (!to.trim() || !subject.trim() || isSending) return;
@@ -479,7 +507,7 @@ function ComposeView({
                 return;
             }
 
-            await sendMail(wallet, [recipientId], subject, body || "(empty)", replyTo?.message.id);
+            await sendMail(wallet, [recipientId], subject, body || "(empty)", replyTo?.message.id, attachment || undefined);
             onBack();
         } catch (err: any) {
             setError(err.message || "Failed to send");
@@ -545,6 +573,30 @@ function ComposeView({
                     />
                 </div>
 
+                {/* Attachment */}
+                {attachment ? (
+                    <div className="flex items-center gap-2 px-2 py-1.5 rounded-lg bg-primary/5 border border-primary/20">
+                        {attachment.type.startsWith("image/") ? (
+                            <ImageIcon className="w-4 h-4 text-primary shrink-0" />
+                        ) : (
+                            <FileText className="w-4 h-4 text-primary shrink-0" />
+                        )}
+                        <span className="text-[10px] text-foreground truncate flex-1">{attachment.name}</span>
+                        <span className="text-[9px] text-muted-foreground shrink-0">{(attachment.size / 1024).toFixed(0)} KB</span>
+                        <button onClick={() => setAttachment(null)} className="text-muted-foreground hover:text-destructive shrink-0">
+                            <X className="w-3.5 h-3.5" />
+                        </button>
+                    </div>
+                ) : (
+                    <button
+                        onClick={pickAttachment}
+                        className="flex items-center gap-1.5 text-[10px] text-muted-foreground hover:text-foreground transition-colors"
+                    >
+                        <Paperclip className="w-3 h-3" />
+                        Attach image (max 2 MB)
+                    </button>
+                )}
+
                 {error && (
                     <div className="px-2 py-1.5 bg-destructive/10 rounded text-destructive text-[10px]">
                         {error}
@@ -564,7 +616,7 @@ function ComposeView({
                     ) : (
                         <>
                             <Send className="w-3.5 h-3.5" />
-                            Send Mail
+                            {attachment ? "Send with Attachment" : "Send Mail"}
                         </>
                     )}
                 </button>
