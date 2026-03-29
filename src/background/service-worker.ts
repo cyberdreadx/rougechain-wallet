@@ -4,6 +4,43 @@
  * Opens approval popup windows for connect/sign/send requests.
  */
 
+import { ml_dsa65 } from "@noble/post-quantum/ml-dsa.js";
+
+function hexToBytes(hex: string): Uint8Array {
+    const bytes = new Uint8Array(hex.length / 2);
+    for (let i = 0; i < bytes.length; i++) {
+        bytes[i] = parseInt(hex.substr(i * 2, 2), 16);
+    }
+    return bytes;
+}
+
+function bytesToHex(bytes: Uint8Array): string {
+    return Array.from(bytes).map(b => b.toString(16).padStart(2, "0")).join("");
+}
+
+function sortKeysDeep(obj: unknown): unknown {
+    if (Array.isArray(obj)) return obj.map(sortKeysDeep);
+    if (obj !== null && typeof obj === "object") {
+        const sorted: Record<string, unknown> = {};
+        for (const key of Object.keys(obj).sort()) {
+            sorted[key] = sortKeysDeep((obj as Record<string, unknown>)[key]);
+        }
+        return sorted;
+    }
+    return obj;
+}
+
+function serializePayload(payload: Record<string, unknown>): string {
+    return JSON.stringify(sortKeysDeep(payload));
+}
+
+function signPayload(payloadJson: string, privateKeyHex: string): string {
+    const messageBytes = new TextEncoder().encode(payloadJson);
+    const secretKey = hexToBytes(privateKeyHex);
+    const signature = ml_dsa65.sign(messageBytes, secretKey);
+    return bytesToHex(signature);
+}
+
 interface ConnectedSite {
     origin: string;
     connectedAt: number;
@@ -635,23 +672,35 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
                         return;
                     }
 
-                    const payload = params?.payload;
-                    if (!payload || typeof payload !== "object") {
+                    // dApp sends { payload: <actual TX>, serializedHex?: <pre-serialized bytes> }
+                    const wrapper = params?.payload;
+                    if (!wrapper || typeof wrapper !== "object") {
                         sendResponse({ error: "Invalid payload" });
                         return;
                     }
 
-                    // Open approval popup for signing
-                    const signApproved = await requestApproval("sign", origin, payload as Record<string, unknown>);
+                    const actualPayload = (wrapper as Record<string, unknown>).payload || wrapper;
+                    const preSerializedHex = (wrapper as Record<string, unknown>).serializedHex as string | undefined;
+
+                    const signApproved = await requestApproval("sign", origin, actualPayload as Record<string, unknown>);
                     if (!signApproved) {
                         sendResponse({ error: "User denied signature request" });
                         return;
                     }
 
-                    const signedPayload = JSON.stringify(payload, Object.keys(payload).sort());
+                    // Use pre-serialized bytes when available for exact byte-level match
+                    let signedPayloadStr: string;
+                    if (preSerializedHex) {
+                        signedPayloadStr = new TextDecoder().decode(hexToBytes(preSerializedHex));
+                    } else {
+                        signedPayloadStr = serializePayload(actualPayload as Record<string, unknown>);
+                    }
+
+                    const signSig = signPayload(signedPayloadStr, wallet.privateKey);
                     sendResponse({
                         result: {
-                            signedPayload,
+                            signedPayload: signedPayloadStr,
+                            signature: signSig,
                             publicKey: wallet.publicKey,
                         },
                     });
@@ -671,14 +720,15 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
                         return;
                     }
 
-                    const payload = params?.payload;
-                    if (!payload || typeof payload !== "object") {
+                    const txWrapper = params?.payload;
+                    if (!txWrapper || typeof txWrapper !== "object") {
                         sendResponse({ error: "Invalid payload" });
                         return;
                     }
 
-                    // Open approval popup for transaction
-                    const sendApproved = await requestApproval("send", origin, payload as Record<string, unknown>);
+                    const txActualPayload = (txWrapper as Record<string, unknown>).payload || txWrapper;
+
+                    const sendApproved = await requestApproval("send", origin, txActualPayload as Record<string, unknown>);
                     if (!sendApproved) {
                         sendResponse({ error: "User denied transaction" });
                         return;
@@ -686,18 +736,21 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 
                     const baseUrl = await getApiBaseUrl();
                     const txPayload = {
-                        ...payload as Record<string, unknown>,
+                        ...txActualPayload as Record<string, unknown>,
                         from: wallet.publicKey,
                         timestamp: Date.now(),
                         nonce: crypto.randomUUID(),
                     };
+
+                    const txPayloadJson = serializePayload(txPayload);
+                    const txSig = signPayload(txPayloadJson, wallet.privateKey);
 
                     const res = await fetch(`${baseUrl}/v2/tx/submit`, {
                         method: "POST",
                         headers: { "Content-Type": "application/json" },
                         body: JSON.stringify({
                             payload: txPayload,
-                            signature: "",
+                            signature: txSig,
                             public_key: wallet.publicKey,
                         }),
                     });
