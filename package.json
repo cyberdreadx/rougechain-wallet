@@ -1,6 +1,6 @@
 {
     "name": "rougechain-wallet",
-    "version": "1.1.0",
+    "version": "1.1.1",
     "description": "Quantum-safe Web3 wallet, encrypted messenger & mail, NFT studio, and dApp gateway browser extension for RougeChain",
     "type": "module",
     "license": "MIT",
