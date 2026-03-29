@@ -19,7 +19,8 @@
     },
     "permissions": [
         "storage",
-        "alarms"
+        "alarms",
+        "notifications"
     ],
     "host_permissions": [
         "https://rougechain.io/*",
@@ -27,8 +28,7 @@
         "http://localhost/*"
     ],
     "background": {
-        "service_worker": "service-worker.js",
-        "type": "module"
+        "service_worker": "service-worker.js"
     },
     "content_scripts": [
         {
