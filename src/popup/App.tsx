@@ -1,5 +1,5 @@
-import { useState, useEffect, useCallback, useRef } from "react";
-import { Wallet, Coins, Image, MessageCircle, Mail, Settings, Lock, MoreVertical, ExternalLink, Copy, Check } from "lucide-react";
+import { useState, useEffect } from "react";
+import { Wallet, Coins, Image, MessageCircle, Mail, Settings, Lock } from "lucide-react";
 import { initStorage } from "../lib/storage";
 import {
     loadUnifiedWallet,
@@ -8,10 +8,6 @@ import {
     unlockUnifiedWallet,
     type UnifiedWallet,
 } from "../lib/unified-wallet";
-import { toMessengerWallet } from "../lib/unified-wallet";
-import { getTotalUnreadCount } from "../lib/pqc-messenger";
-import type { WalletWithPrivateKeys } from "../lib/pqc-messenger";
-import { getUnreadMailCount } from "../lib/pqc-mail";
 import WalletTab from "./tabs/WalletTab";
 import TokensTab from "./tabs/TokensTab";
 import NftsTab from "./tabs/NftsTab";
@@ -22,8 +18,6 @@ import UnlockScreen from "./components/UnlockScreen";
 import CreateWalletScreen from "./components/CreateWalletScreen";
 import { getCoreApiBaseUrl } from "../lib/network";
 
-import { pubkeyToAddress } from "../lib/address";
-
 type Tab = "wallet" | "tokens" | "nfts" | "messenger" | "mail" | "settings";
 
 export default function App() {
@@ -31,12 +25,6 @@ export default function App() {
     const [activeTab, setActiveTab] = useState<Tab>("wallet");
     const [wallet, setWallet] = useState<UnifiedWallet | null>(null);
     const [locked, setLocked] = useState(false);
-    const [showMenu, setShowMenu] = useState(false);
-    const [copied, setCopied] = useState(false);
-    const [rougeAddress, setRougeAddress] = useState("");
-    const [unreadChats, setUnreadChats] = useState(0);
-    const [unreadMail, setUnreadMail] = useState(0);
-    const unreadIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
     useEffect(() => {
         (async () => {
@@ -48,44 +36,6 @@ export default function App() {
             setReady(true);
         })();
     }, []);
-
-    // Compute rouge1 address when wallet changes
-    useEffect(() => {
-        if (wallet?.signingPublicKey) {
-            pubkeyToAddress(wallet.signingPublicKey).then(setRougeAddress).catch(() => {});
-        }
-    }, [wallet?.signingPublicKey]);
-
-    const pollUnread = useCallback(async () => {
-        if (!wallet) return;
-        try {
-            const mw = toMessengerWallet(wallet) as WalletWithPrivateKeys;
-            const [chatCount, mailCount] = await Promise.all([
-                getTotalUnreadCount(mw).catch(() => 0),
-                getUnreadMailCount(mw).catch(() => 0),
-            ]);
-            setUnreadChats(chatCount);
-            setUnreadMail(mailCount);
-            const totalBadge = chatCount + mailCount;
-            try {
-                if (typeof chrome !== "undefined" && chrome.action?.setBadgeText) {
-                    chrome.action.setBadgeText({ text: totalBadge > 0 ? String(totalBadge) : "" });
-                    chrome.action.setBadgeBackgroundColor({ color: "#00CEB6" });
-                }
-                chrome.runtime?.sendMessage?.({ type: "messages-read", unread: totalBadge });
-            } catch { /* not in extension context */ }
-        } catch { /* ignore */ }
-    }, [wallet]);
-
-    useEffect(() => {
-        if (!wallet) return;
-        pollUnread();
-        unreadIntervalRef.current = setInterval(pollUnread, 15000);
-        return () => {
-            if (unreadIntervalRef.current) clearInterval(unreadIntervalRef.current);
-        };
-    }, [wallet, pollUnread]);
-
 
     if (!ready) {
         return (
@@ -143,77 +93,11 @@ export default function App() {
                     </div>
                     <span className="text-sm font-bold text-gradient-quantum tracking-tight">RougeChain</span>
                 </div>
-                <div className="flex items-center gap-1.5">
-                    <div className="flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-success/10 border border-success/20">
-                        <div className="w-1.5 h-1.5 rounded-full bg-success animate-pulse shadow-sm shadow-success/50" />
-                        <span className="text-[10px] text-success font-semibold">
-                            {getCoreApiBaseUrl().includes("testnet") ? "Testnet" : getCoreApiBaseUrl().includes("localhost") ? "Devnet" : "Mainnet"}
-                        </span>
-                    </div>
-                    {wallet && (
-                        <div className="relative">
-                            <button
-                                onClick={() => setShowMenu(!showMenu)}
-                                className="p-1.5 rounded-lg hover:bg-secondary/50 transition-colors text-muted-foreground hover:text-foreground"
-                            >
-                                <MoreVertical className="w-4 h-4" />
-                            </button>
-                            {showMenu && (
-                                <>
-                                    <div className="fixed inset-0 z-40" onClick={() => setShowMenu(false)} />
-                                    <div className="absolute right-0 top-full mt-1 w-48 py-1 rounded-lg bg-card border border-border shadow-xl z-50 animate-in slide-in-from-top-1">
-                                        <a
-                                            href="https://rougechain.io/blockchain"
-                                            target="_blank"
-                                            rel="noopener noreferrer"
-                                            className="flex items-center gap-2 px-3 py-2 text-xs text-foreground hover:bg-secondary/50 transition-colors"
-                                            onClick={() => setShowMenu(false)}
-                                        >
-                                            <ExternalLink className="w-3.5 h-3.5" />
-                                            View on Explorer
-                                        </a>
-                                        <button
-                                            onClick={() => {
-                                                navigator.clipboard.writeText(rougeAddress || wallet.signingPublicKey);
-                                                setCopied(true);
-                                                setTimeout(() => { setCopied(false); setShowMenu(false); }, 1200);
-                                            }}
-                                            className="flex items-center gap-2 px-3 py-2 text-xs text-foreground hover:bg-secondary/50 transition-colors w-full text-left"
-                                        >
-                                            {copied ? <Check className="w-3.5 h-3.5 text-success" /> : <Copy className="w-3.5 h-3.5" />}
-                                            {copied ? "Copied!" : "Copy Address"}
-                                        </button>
-                                        <div className="border-t border-border my-1" />
-                                        <button
-                                            onClick={() => { setActiveTab("settings"); setShowMenu(false); }}
-                                            className="flex items-center gap-2 px-3 py-2 text-xs text-foreground hover:bg-secondary/50 transition-colors w-full text-left"
-                                        >
-                                            <Settings className="w-3.5 h-3.5" />
-                                            Settings
-                                        </button>
-                                        <button
-                                            onClick={() => { setLocked(true); setWallet(null); setShowMenu(false); }}
-                                            className="flex items-center gap-2 px-3 py-2 text-xs text-warning hover:bg-secondary/50 transition-colors w-full text-left"
-                                        >
-                                            <Lock className="w-3.5 h-3.5" />
-                                            Lock Wallet
-                                        </button>
-                                        <div className="border-t border-border my-1" />
-                                        <a
-                                            href="https://rougechain.io"
-                                            target="_blank"
-                                            rel="noopener noreferrer"
-                                            className="flex items-center gap-2 px-3 py-2 text-xs text-muted-foreground hover:bg-secondary/50 transition-colors"
-                                            onClick={() => setShowMenu(false)}
-                                        >
-                                            <ExternalLink className="w-3.5 h-3.5" />
-                                            Open Full Web App
-                                        </a>
-                                    </div>
-                                </>
-                            )}
-                        </div>
-                    )}
+                <div className="flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-success/10 border border-success/20">
+                    <div className="w-1.5 h-1.5 rounded-full bg-success animate-pulse shadow-sm shadow-success/50" />
+                    <span className="text-[10px] text-success font-semibold">
+                        {getCoreApiBaseUrl().includes("testnet") ? "Testnet" : getCoreApiBaseUrl().includes("localhost") ? "Devnet" : "Mainnet"}
+                    </span>
                 </div>
             </div>
 
@@ -235,43 +119,23 @@ export default function App() {
 
             {/* Bottom tab bar */}
             <div className="flex items-center border-t border-border tab-bar-glass">
-                {tabs.map(({ id, label, icon: Icon }) => {
-                    const badge = id === "messenger" ? unreadChats : id === "mail" ? unreadMail : 0;
-                    const tooltip =
-                        id === "messenger" && badge > 0
-                            ? `${badge} unread message${badge > 1 ? "s" : ""}`
-                        : id === "mail" && badge > 0
-                            ? `${badge} unread email${badge > 1 ? "s" : ""}`
-                        : label;
-                    return (
-                        <button
-                            key={id}
-                            onClick={() => {
-                                setActiveTab(id);
-                                if (id === "messenger" || id === "mail") setTimeout(pollUnread, 2000);
-                            }}
-                            title={tooltip}
-                            className={`flex-1 flex flex-col items-center gap-0.5 py-2.5 transition-all duration-200 relative ${
-                                activeTab === id
-                                    ? "text-primary"
-                                    : "text-muted-foreground hover:text-foreground"
-                            }`}
-                        >
-                            {activeTab === id && (
-                                <div className="absolute top-0 left-1/2 -translate-x-1/2 w-10 h-0.5 rounded-full bg-primary shadow-sm shadow-primary/50" />
-                            )}
-                            <div className="relative">
-                                <Icon className={`w-4 h-4 transition-transform duration-200 ${activeTab === id ? "scale-110" : ""}`} />
-                                {badge > 0 && (
-                                    <span className="absolute -top-1.5 -right-2.5 min-w-[14px] h-[14px] flex items-center justify-center rounded-full bg-primary text-primary-foreground text-[8px] font-bold px-0.5 leading-none shadow-sm shadow-primary/40">
-                                        {badge > 99 ? "99+" : badge}
-                                    </span>
-                                )}
-                            </div>
-                            <span className={`text-[10px] ${activeTab === id ? "font-semibold" : "font-medium"}`}>{label}</span>
-                        </button>
-                    );
-                })}
+                {tabs.map(({ id, label, icon: Icon }) => (
+                    <button
+                        key={id}
+                        onClick={() => setActiveTab(id)}
+                        className={`flex-1 flex flex-col items-center gap-0.5 py-2.5 transition-all duration-200 relative ${
+                            activeTab === id
+                                ? "text-primary"
+                                : "text-muted-foreground hover:text-foreground"
+                        }`}
+                    >
+                        {activeTab === id && (
+                            <div className="absolute top-0 left-1/2 -translate-x-1/2 w-10 h-0.5 rounded-full bg-primary shadow-sm shadow-primary/50" />
+                        )}
+                        <Icon className={`w-4 h-4 transition-transform duration-200 ${activeTab === id ? "scale-110" : ""}`} />
+                        <span className={`text-[10px] ${activeTab === id ? "font-semibold" : "font-medium"}`}>{label}</span>
+                    </button>
+                ))}
             </div>
         </div>
     );

@@ -1,6 +1,8 @@
 import { useState, useEffect, useCallback } from "react";
-import { RefreshCw, Send, Download, Droplets, Copy, Check, TrendingUp, ArrowDownUp, Shield, ShieldOff, AlertCircle, X, ExternalLink } from "lucide-react";
+import { RefreshCw, Send, Download, Droplets, Copy, Check, TrendingUp, ArrowDownUp, Shield, ShieldOff, AlertCircle, X } from "lucide-react";
 import type { UnifiedWallet } from "../../lib/unified-wallet";
+import { pubkeyToAddress, formatAddress, formatIdentity } from "../../lib/address";
+import { getActiveNetwork } from "../../lib/network";
 import {
     getWalletBalance,
     getWalletTransactions,
@@ -20,7 +22,6 @@ import {
     type ShieldedNote,
     type StoredNote,
 } from "../../lib/pqc-wallet";
-import { pubkeyToAddress, formatAddress, formatIdentity } from "../../lib/address";
 
 interface Props {
     wallet: UnifiedWallet;
@@ -57,7 +58,6 @@ export default function WalletTab({ wallet }: Props) {
     const [sendTo, setSendTo] = useState("");
     const [sendAmount, setSendAmount] = useState("");
     const [sendMemo, setSendMemo] = useState("");
-    const [sendToken, setSendToken] = useState("XRGE");
     const [isSending, setIsSending] = useState(false);
     const [showShield, setShowShield] = useState(false);
     const [shieldAmount, setShieldAmount] = useState("");
@@ -69,13 +69,7 @@ export default function WalletTab({ wallet }: Props) {
     const [savedNotes, setSavedNotes] = useState<StoredNote[]>([]);
     const [unshieldingNote, setUnshieldingNote] = useState<string | null>(null);
     const [toast, setToast] = useState<{ message: string; type: "error" | "success" } | null>(null);
-    const [selectedTxId, setSelectedTxId] = useState<string | null>(null);
-    const [walletAddress, setWalletAddress] = useState<string | null>(null);
-
-    // Derive rouge1 address
-    useEffect(() => {
-        pubkeyToAddress(wallet.signingPublicKey).then(setWalletAddress).catch(() => {});
-    }, [wallet.signingPublicKey]);
+    const [rougeAddress, setRougeAddress] = useState<string>("");
 
     const showToast = (message: string, type: "error" | "success" = "error") => {
         setToast({ message, type });
@@ -109,11 +103,15 @@ export default function WalletTab({ wallet }: Props) {
         return () => clearInterval(interval);
     }, [refreshData]);
 
+    // Compute rouge1 address from signing key
+    useEffect(() => {
+        pubkeyToAddress(wallet.signingPublicKey).then(setRougeAddress).catch(() => {});
+    }, [wallet.signingPublicKey]);
+
     const xrgeBalance = balances.find(b => b.symbol === TOKEN_SYMBOL)?.balance || 0;
 
     const copyAddress = () => {
-        const textToCopy = walletAddress || wallet.signingPublicKey;
-        navigator.clipboard.writeText(textToCopy);
+        navigator.clipboard.writeText(rougeAddress || wallet.signingPublicKey);
         setCopied(true);
         setTimeout(() => setCopied(false), 2000);
     };
@@ -133,33 +131,41 @@ export default function WalletTab({ wallet }: Props) {
 
     const handleSend = async () => {
         if (!sendTo || !sendAmount || isSending) return;
-        const amt = parseFloat(sendAmount);
-        if (isNaN(amt) || amt <= 0) { showToast("Invalid amount"); return; }
-
-        const tokenBal = balances.find(b => b.symbol === sendToken)?.balance || 0;
-        if (amt > tokenBal) { showToast(`Insufficient ${sendToken} balance (have ${tokenBal.toLocaleString()})`); return; }
-        if (sendToken !== "XRGE") {
-            const xrgeBal = balances.find(b => b.symbol === "XRGE")?.balance || 0;
-            if (xrgeBal < 1) { showToast("Need at least 1 XRGE for fee"); return; }
-        }
-
         setIsSending(true);
         try {
-            const { sendTransaction } = await import("../../lib/pqc-wallet");
-            await sendTransaction(
-                wallet.signingPrivateKey,
-                wallet.signingPublicKey,
-                sendTo,
-                amt,
-                sendToken,
-                sendMemo || undefined
-            );
+            // v2 client-side signed transfer (the v1 /tx/submit endpoint is retired — 410 Gone).
+            const { getCoreApiBaseUrl, getCoreApiHeaders } = await import("../../lib/network");
+            const { ml_dsa65 } = await import("@noble/post-quantum/ml-dsa.js");
+            const { invalidate } = await import("../../lib/api-cache");
+            const baseUrl = getCoreApiBaseUrl();
+            if (!baseUrl) throw new Error("No node configured");
+
+            const payload = {
+                type: "transfer",
+                from: wallet.signingPublicKey,
+                to: sendTo,
+                amount: parseFloat(sendAmount),
+                token: TOKEN_SYMBOL,
+                timestamp: Date.now(),
+                nonce: bytesToHex(crypto.getRandomValues(new Uint8Array(16))),
+            };
+            const sorted = sortKeysDeep(payload);
+            const payloadBytes = new TextEncoder().encode(JSON.stringify(sorted));
+            const signature = bytesToHex(ml_dsa65.sign(payloadBytes, hexToBytes(wallet.signingPrivateKey)));
+
+            const res = await fetch(`${baseUrl}/v2/transfer`, {
+                method: "POST",
+                headers: { ...getCoreApiHeaders(), "Content-Type": "application/json" },
+                body: JSON.stringify({ payload: sorted, signature, public_key: wallet.signingPublicKey }),
+            });
+            const data = await res.json();
+            if (!data.success) throw new Error(data.error || "Send failed");
+
+            invalidate("balance"); invalidate("blocks"); invalidate("tokens");
             setShowSend(false);
             setSendTo("");
             setSendAmount("");
             setSendMemo("");
-            setSendToken("XRGE");
-            showToast(`Sent ${amt} ${sendToken}`, "success");
             await refreshData();
         } catch (err: any) {
             console.error("Send failed:", err);
@@ -210,33 +216,28 @@ export default function WalletTab({ wallet }: Props) {
                             onClick={copyAddress}
                             className="flex items-center gap-1 text-[10px] text-muted-foreground font-mono hover:text-foreground transition-colors mt-0.5"
                         >
-                            {walletAddress ? formatAddress(walletAddress) : truncateAddress(wallet.signingPublicKey)}
+                            {rougeAddress ? formatAddress(rougeAddress) : truncateAddress(wallet.signingPublicKey)}
                             {copied ? <Check className="w-2.5 h-2.5 text-success" /> : <Copy className="w-2.5 h-2.5" />}
                         </button>
                     </div>
                 </div>
 
-                {/* Shielded balance badge (per-wallet, not global) */}
-                {(() => {
-                    const myNotes = getActiveNotes(wallet.signingPublicKey);
-                    const myBalance = myNotes.reduce((s, n) => s + n.value, 0);
-                    if (myNotes.length === 0) return null;
-                    return (
-                        <div className="inline-flex items-center gap-1.5 px-2 py-1 rounded-full bg-primary/10 border border-primary/20 mb-3">
-                            <Shield className="w-3 h-3 text-primary" />
-                            <span className="text-[10px] text-primary font-semibold">
-                                {myBalance > 0
-                                    ? `${myBalance.toLocaleString()} XRGE shielded`
-                                    : `${myNotes.length} shielded note${myNotes.length !== 1 ? 's' : ''}`
-                                }
-                            </span>
-                        </div>
-                    );
-                })()}
+                {/* Shielded balance badge */}
+                {shieldedStats && shieldedStats.active_notes > 0 && (
+                    <div className="inline-flex items-center gap-1.5 px-2 py-1 rounded-full bg-primary/10 border border-primary/20 mb-3">
+                        <Shield className="w-3 h-3 text-primary" />
+                        <span className="text-[10px] text-primary font-semibold">
+                            {getShieldedBalance(wallet.signingPublicKey) > 0 
+                              ? `${getShieldedBalance(wallet.signingPublicKey).toLocaleString()} XRGE shielded`
+                              : `${shieldedStats.active_notes} shielded note${shieldedStats.active_notes !== 1 ? 's' : ''}`
+                            }
+                        </span>
+                    </div>
+                )}
 
-                {/* Action buttons — 3 + 2 grid */}
+                {/* Action buttons — Faucet only on testnet (mainnet has no faucet) */}
                 <div className="space-y-2 mt-3">
-                    <div className="grid grid-cols-3 gap-2">
+                    <div className={`grid ${getActiveNetwork() === "testnet" ? "grid-cols-3" : "grid-cols-2"} gap-2`}>
                         <button
                             onClick={() => setShowSend(!showSend)}
                             className="flex flex-col items-center gap-1 py-2.5 rounded-xl bg-primary text-primary-foreground font-semibold hover:bg-primary/90 active:scale-[0.96] transition-all shadow-md shadow-primary/20"
@@ -246,19 +247,21 @@ export default function WalletTab({ wallet }: Props) {
                         </button>
                         <button
                             onClick={copyAddress}
-                            className={`flex flex-col items-center gap-1 py-2.5 rounded-xl font-semibold active:scale-[0.96] transition-all ${copied ? "bg-success/20 text-success" : "bg-secondary text-secondary-foreground hover:bg-secondary/80"}`}
+                            className="flex flex-col items-center gap-1 py-2.5 rounded-xl bg-secondary text-secondary-foreground font-semibold hover:bg-secondary/80 active:scale-[0.96] transition-all"
                         >
-                            {copied ? <Check className="w-4 h-4" /> : <Download className="w-4 h-4" />}
-                            <span className="text-[10px]">{copied ? "Copied!" : "Receive"}</span>
+                            <Download className="w-4 h-4" />
+                            <span className="text-[10px]">Receive</span>
                         </button>
-                        <button
-                            onClick={handleFaucet}
-                            disabled={isClaiming}
-                            className="flex flex-col items-center gap-1 py-2.5 rounded-xl bg-accent/15 text-accent-foreground font-semibold hover:bg-accent/25 active:scale-[0.96] transition-all disabled:opacity-50"
-                        >
-                            <Droplets className={`w-4 h-4 ${isClaiming ? "animate-spin" : ""}`} />
-                            <span className="text-[10px]">{isClaiming ? "..." : "Faucet"}</span>
-                        </button>
+                        {getActiveNetwork() === "testnet" && (
+                            <button
+                                onClick={handleFaucet}
+                                disabled={isClaiming}
+                                className="flex flex-col items-center gap-1 py-2.5 rounded-xl bg-accent/15 text-accent-foreground font-semibold hover:bg-accent/25 active:scale-[0.96] transition-all disabled:opacity-50"
+                            >
+                                <Droplets className={`w-4 h-4 ${isClaiming ? "animate-spin" : ""}`} />
+                                <span className="text-[10px]">{isClaiming ? "..." : "Faucet"}</span>
+                            </button>
+                        )}
                     </div>
                     <div className="grid grid-cols-2 gap-2">
                         <button
@@ -282,19 +285,6 @@ export default function WalletTab({ wallet }: Props) {
             {/* Send form */}
             {showSend && (
                 <div className="p-3 border-b border-border bg-card/80 space-y-2">
-                    {balances.filter(b => b.balance > 0).length > 1 && (
-                        <select
-                            value={sendToken}
-                            onChange={e => setSendToken(e.target.value)}
-                            className="w-full px-3 py-2 rounded-lg bg-input border border-border text-xs text-foreground focus:outline-none focus:ring-1 focus:ring-primary"
-                        >
-                            {balances.filter(b => b.balance > 0).map(b => (
-                                <option key={b.symbol} value={b.symbol}>
-                                    {b.symbol} ({b.balance.toLocaleString(undefined, { maximumFractionDigits: 4 })})
-                                </option>
-                            ))}
-                        </select>
-                    )}
                     <input
                         type="text"
                         placeholder="Recipient address"
@@ -318,16 +308,12 @@ export default function WalletTab({ wallet }: Props) {
                             className="flex-1 px-3 py-2 rounded-lg bg-input border border-border text-xs text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-1 focus:ring-primary"
                         />
                     </div>
-                    <p className="text-[10px] text-muted-foreground">
-                        Available: {(balances.find(b => b.symbol === sendToken)?.balance || 0).toLocaleString(undefined, { maximumFractionDigits: 4 })} {sendToken}
-                        {sendToken !== "XRGE" && " · Fee: 1 XRGE"}
-                    </p>
                     <button
                         onClick={handleSend}
                         disabled={!sendTo || !sendAmount || isSending}
                         className="w-full py-2 rounded-lg bg-primary text-primary-foreground text-xs font-medium hover:bg-primary/90 disabled:opacity-50 transition-colors"
                     >
-                        {isSending ? "Signing & Sending..." : `Send ${sendToken}`}
+                        {isSending ? "Signing & Sending..." : `Send ${TOKEN_SYMBOL}`}
                     </button>
                 </div>
             )}
@@ -401,8 +387,7 @@ export default function WalletTab({ wallet }: Props) {
                                     setIsShielding(true);
                                     try {
                                         const note = await createShieldedNote(amt, wallet.signingPublicKey);
-                                        // Submit shield tx
-                                        const { sendTransaction: sendTx } = await import("../../lib/pqc-wallet");
+                                        // Submit shield tx (v2 signed)
                                         const { getCoreApiBaseUrl, getCoreApiHeaders } = await import("../../lib/network");
                                         const baseUrl = getCoreApiBaseUrl();
                                         const { ml_dsa65 } = await import("@noble/post-quantum/ml-dsa.js");
@@ -536,83 +521,31 @@ export default function WalletTab({ wallet }: Props) {
                     ) : (
                         <div className="space-y-1">
                             {transactions.map(tx => (
-                                <div key={tx.id}>
-                                    <div
-                                        onClick={() => setSelectedTxId(selectedTxId === tx.id ? null : tx.id)}
-                                        className={`flex items-center justify-between py-2 px-2 rounded-lg hover:bg-secondary/30 card-hover transition-all cursor-pointer ${selectedTxId === tx.id ? 'bg-secondary/40' : ''}`}
-                                    >
-                                        <div className="flex items-center gap-2 min-w-0">
-                                            <div className={`w-6 h-6 rounded-full flex items-center justify-center text-[10px] ${tx.type === "receive"
-                                                ? "bg-success/20 text-success"
-                                                : "bg-destructive/20 text-destructive"
-                                                }`}>
-                                                {tx.type === "receive" ? <TrendingUp className="w-3 h-3" /> : <Send className="w-3 h-3" />}
-                                            </div>
-                                            <div className="min-w-0">
-                                                <p className="text-xs text-foreground capitalize">{tx.type}</p>
-                                                <p className="text-[10px] text-muted-foreground font-mono truncate">
-                                                    {formatIdentity(tx.address || "")}
-                                                </p>
-                                            </div>
+                                <div
+                                    key={tx.id}
+                                    className="flex items-center justify-between py-2 px-2 rounded-lg hover:bg-secondary/30 card-hover transition-all cursor-default"
+                                >
+                                    <div className="flex items-center gap-2 min-w-0">
+                                        <div className={`w-6 h-6 rounded-full flex items-center justify-center text-[10px] ${tx.type === "receive"
+                                            ? "bg-success/20 text-success"
+                                            : "bg-destructive/20 text-destructive"
+                                            }`}>
+                                            {tx.type === "receive" ? <TrendingUp className="w-3 h-3" /> : <Send className="w-3 h-3" />}
                                         </div>
-                                        <div className="text-right flex-shrink-0">
-                                            <p className={`text-xs font-mono ${tx.type === "receive" ? "text-success" : "text-foreground"
-                                                }`}>
-                                                {tx.type === "receive" ? "+" : "-"}{tx.amount} {tx.symbol}
+                                        <div className="min-w-0">
+                                            <p className="text-xs text-foreground capitalize">{tx.type}</p>
+                                            <p className="text-[10px] text-muted-foreground font-mono truncate">
+                                                {formatIdentity(tx.address || "")}
                                             </p>
-                                            <p className="text-[10px] text-muted-foreground">{tx.timeLabel}</p>
                                         </div>
                                     </div>
-                                    {/* Expanded detail panel */}
-                                    {selectedTxId === tx.id && (
-                                        <div className="mx-2 mb-1 p-2.5 rounded-lg bg-muted/50 border border-border space-y-1.5 animate-in slide-in-from-top-1">
-                                            {tx.from && (
-                                                <div className="flex justify-between items-center">
-                                                    <span className="text-[10px] text-muted-foreground">From</span>
-                                                    <span className="text-[10px] font-mono text-foreground truncate max-w-[180px]">{formatIdentity(tx.from)}</span>
-                                                </div>
-                                            )}
-                                            {tx.to && (
-                                                <div className="flex justify-between items-center">
-                                                    <span className="text-[10px] text-muted-foreground">To</span>
-                                                    <span className="text-[10px] font-mono text-foreground truncate max-w-[180px]">{formatIdentity(tx.to)}</span>
-                                                </div>
-                                            )}
-                                            {tx.fee !== undefined && (
-                                                <div className="flex justify-between">
-                                                    <span className="text-[10px] text-muted-foreground">Fee</span>
-                                                    <span className="text-[10px] text-foreground">{tx.fee} {TOKEN_SYMBOL}</span>
-                                                </div>
-                                            )}
-                                            {tx.memo && (
-                                                <div className="flex justify-between">
-                                                    <span className="text-[10px] text-muted-foreground">Memo</span>
-                                                    <span className="text-[10px] text-foreground truncate max-w-[180px]">{tx.memo}</span>
-                                                </div>
-                                            )}
-                                            {tx.blockIndex !== undefined && (
-                                                <div className="flex justify-between">
-                                                    <span className="text-[10px] text-muted-foreground">Block</span>
-                                                    <span className="text-[10px] text-foreground">#{tx.blockIndex}</span>
-                                                </div>
-                                            )}
-                                            {tx.txHash && (
-                                                <div className="flex justify-between items-center">
-                                                    <span className="text-[10px] text-muted-foreground">Tx Hash</span>
-                                                    <span className="text-[10px] font-mono text-foreground truncate max-w-[150px]">{truncateAddress(tx.txHash)}</span>
-                                                </div>
-                                            )}
-                                            <a
-                                                href={`https://rougechain.io/tx/${tx.txHash || tx.id}`}
-                                                target="_blank"
-                                                rel="noopener noreferrer"
-                                                className="flex items-center justify-center gap-1.5 w-full mt-1 py-1.5 rounded-md bg-primary/10 text-primary text-[10px] font-medium hover:bg-primary/20 transition-colors"
-                                            >
-                                                <ExternalLink className="w-3 h-3" />
-                                                View on Explorer
-                                            </a>
-                                        </div>
-                                    )}
+                                    <div className="text-right flex-shrink-0">
+                                        <p className={`text-xs font-mono ${tx.type === "receive" ? "text-success" : "text-foreground"
+                                            }`}>
+                                            {tx.type === "receive" ? "+" : "-"}{tx.amount} {tx.symbol}
+                                        </p>
+                                        <p className="text-[10px] text-muted-foreground">{tx.timeLabel}</p>
+                                    </div>
                                 </div>
                             ))}
                         </div>

@@ -2,10 +2,10 @@ import { useState, useEffect, useRef } from "react";
 import {
     ArrowLeft, Send, Lock, Shield, Plus, Loader2,
     MessageCircle, CheckCircle2, XCircle, Timer,
-    Paperclip, EyeOff, Image as ImageIcon, Video, X, Trash2, KeyRound, Ban, Eye
+    Paperclip, EyeOff, Image as ImageIcon, Video, X, Trash2, Ban
 } from "lucide-react";
 import type { UnifiedWallet } from "../../lib/unified-wallet";
-import { toMessengerWallet, saveUnifiedWallet } from "../../lib/unified-wallet";
+import { toMessengerWallet } from "../../lib/unified-wallet";
 import {
     getConversations,
     getMessages,
@@ -20,16 +20,12 @@ import {
     blockWallet,
     unblockWallet,
     getBlockedWalletIds,
-    getPrivacySettings,
-    savePrivacySettings,
     type Conversation,
     type Message,
     type MessageType,
-    markConversationRead,
     type Wallet,
     type WalletWithPrivateKeys,
 } from "../../lib/pqc-messenger";
-import { formatIdentity } from "../../lib/address";
 
 interface Props {
     wallet: UnifiedWallet;
@@ -51,8 +47,6 @@ export default function MessengerTab({ wallet }: Props) {
     const [isLoading, setIsLoading] = useState(true);
     const [regStatus, setRegStatus] = useState<"pending" | "ok" | "error">("pending");
     const [regError, setRegError] = useState<string | null>(null);
-    const [isRegeneratingKeys, setIsRegeneratingKeys] = useState(false);
-    const [discoverable, setDiscoverable] = useState(() => getPrivacySettings().discoverable);
 
     const messengerWallet = toMessengerWallet(wallet) as WalletWithPrivateKeys;
 
@@ -112,72 +106,12 @@ export default function MessengerTab({ wallet }: Props) {
                 <span className="text-xs font-medium text-muted-foreground uppercase tracking-wider">
                     Conversations
                 </span>
-                <div className="flex items-center gap-1">
-                    <button
-                        onClick={async () => {
-                            if (isRegeneratingKeys) return;
-                            setIsRegeneratingKeys(true);
-                            try {
-                                const { ml_dsa65 } = await import("@noble/post-quantum/ml-dsa.js");
-                                const { ml_kem768 } = await import("@noble/post-quantum/ml-kem.js");
-                                const bytesToHex = (bytes: Uint8Array) =>
-                                    Array.from(bytes).map(b => b.toString(16).padStart(2, '0')).join('');
-                                const sigKeypair = ml_dsa65.keygen();
-                                const encKeypair = ml_kem768.keygen();
-                                const updated: UnifiedWallet = {
-                                    ...wallet,
-                                    signingPublicKey: bytesToHex(sigKeypair.publicKey),
-                                    signingPrivateKey: bytesToHex(sigKeypair.secretKey),
-                                    encryptionPublicKey: bytesToHex(encKeypair.publicKey),
-                                    encryptionPrivateKey: bytesToHex(encKeypair.secretKey),
-                                    version: 4,
-                                };
-                                // Write directly to chrome.storage.local and AWAIT it
-                                // saveUnifiedWallet is fire-and-forget, which loses data on reload
-                                const storageKey = "pqc-unified-wallet";
-                                await chrome.storage.local.set({ [storageKey]: JSON.stringify(updated) });
-                                // Also update the in-memory cache
-                                saveUnifiedWallet(updated);
-                                await registerWalletOnNode(toMessengerWallet(updated) as WalletWithPrivateKeys);
-                                setRegStatus("ok");
-                                setRegError(null);
-                                // Now safe to reload since storage write completed
-                                window.location.reload();
-                            } catch (err: any) {
-                                setRegError(err.message || "Key regeneration failed");
-                                setRegStatus("error");
-                            } finally {
-                                setIsRegeneratingKeys(false);
-                            }
-                        }}
-                        className="w-7 h-7 rounded-lg bg-yellow-500/20 flex items-center justify-center text-yellow-400 hover:bg-yellow-500/30 transition-colors"
-                        title="Regenerate keys (fixes key mismatch errors)"
-                    >
-                        <KeyRound className={`w-3.5 h-3.5 ${isRegeneratingKeys ? "animate-spin" : ""}`} />
-                    </button>
-                    <button
-                        onClick={async () => {
-                            const next = !discoverable;
-                            setDiscoverable(next);
-                            savePrivacySettings({ discoverable: next });
-                            await registerWalletOnNode(messengerWallet);
-                        }}
-                        className={`w-7 h-7 rounded-lg flex items-center justify-center transition-colors ${
-                            discoverable
-                                ? "bg-green-500/20 text-green-400 hover:bg-green-500/30"
-                                : "bg-red-500/20 text-red-400 hover:bg-red-500/30"
-                        }`}
-                        title={discoverable ? "Discoverable: ON (visible to others)" : "Discoverable: OFF (hidden from contacts)"}
-                    >
-                        {discoverable ? <Eye className="w-3.5 h-3.5" /> : <EyeOff className="w-3.5 h-3.5" />}
-                    </button>
-                    <button
-                        onClick={() => { setShowContacts(!showContacts); loadContacts(); }}
-                        className="w-7 h-7 rounded-lg bg-primary/20 flex items-center justify-center text-primary hover:bg-primary/30 transition-colors"
-                    >
-                        <Plus className="w-3.5 h-3.5" />
-                    </button>
-                </div>
+                <button
+                    onClick={() => { setShowContacts(!showContacts); loadContacts(); }}
+                    className="w-7 h-7 rounded-lg bg-primary/20 flex items-center justify-center text-primary hover:bg-primary/30 transition-colors"
+                >
+                    <Plus className="w-3.5 h-3.5" />
+                </button>
             </div>
 
             {/* Registration status */}
@@ -197,8 +131,33 @@ export default function MessengerTab({ wallet }: Props) {
             {/* Contact picker */}
             {showContacts && (
                 <div className="border-b border-border bg-card/80 max-h-40 overflow-y-auto">
+                    {/* Note to Self */}
+                    <button
+                        onClick={async () => {
+                            try {
+                                const convo = await createConversation(
+                                    messengerWallet,
+                                    [wallet.id, wallet.id],
+                                    "Note to Self"
+                                );
+                                convo.name = "Note to Self";
+                                setConversations(prev => [convo, ...prev]);
+                                setSelected(convo);
+                                setShowContacts(false);
+                            } catch (err) { console.error(err); }
+                        }}
+                        className="w-full flex items-center gap-2 px-3 py-2 hover:bg-secondary/30 transition-colors text-left border-b border-border/50"
+                    >
+                        <div className="w-7 h-7 rounded-full bg-amber-500/20 flex items-center justify-center">
+                            <MessageCircle className="w-3.5 h-3.5 text-amber-500" />
+                        </div>
+                        <div className="min-w-0">
+                            <p className="text-xs font-medium text-foreground">Note to Self</p>
+                            <p className="text-[10px] text-muted-foreground">Save private notes</p>
+                        </div>
+                    </button>
                     {contacts.length === 0 ? (
-                        <p className="text-xs text-muted-foreground p-3 text-center">No contacts found</p>
+                        <p className="text-xs text-muted-foreground p-3 text-center">No other contacts found</p>
                     ) : (
                         contacts.map(c => (
                             <button
@@ -222,7 +181,7 @@ export default function MessengerTab({ wallet }: Props) {
                                 <div className="min-w-0">
                                     <p className="text-xs font-medium text-foreground truncate">{c.displayName}</p>
                                     <p className="text-[10px] text-muted-foreground font-mono truncate">
-                                        {formatIdentity(c.signingPublicKey)}
+                                        {c.signingPublicKey.substring(0, 16)}...
                                     </p>
                                 </div>
                             </button>
@@ -246,9 +205,16 @@ export default function MessengerTab({ wallet }: Props) {
                 ) : (
                     conversations.map(convo => {
                         const myIds = new Set([wallet.id, wallet.signingPublicKey, wallet.encryptionPublicKey].filter(Boolean));
-                        const other = convo.participants?.find(p =>
-                            !myIds.has(p.id) && !myIds.has(p.signingPublicKey) && !myIds.has(p.encryptionPublicKey)
-                        );
+                        const isSelf = (p: any) => myIds.has(p.id) || myIds.has(p.signingPublicKey || "") || myIds.has(p.encryptionPublicKey || "");
+                        const hasBot = convo.name === "Quantum Bot" || convo.participants?.some((p: any) => p.id?.startsWith("bot-"));
+                        const isNoteToSelf = !hasBot && (convo.name === "Note to Self" || (convo.participants?.every((p: any) => isSelf(p)) ?? false));
+                        let other = convo.participants?.find((p: any) => !isSelf(p));
+                        if (!other && wallet.displayName && convo.participants?.length === 2) {
+                            other = convo.participants.find((p: any) => p.displayName !== wallet.displayName);
+                        }
+                        const displayName = isNoteToSelf
+                            ? "Note to Self"
+                            : (other?.displayName || (convo.name && convo.name !== wallet.displayName ? convo.name : null) || "Unknown");
                         return (
                             <div
                                 key={convo.id}
@@ -258,15 +224,26 @@ export default function MessengerTab({ wallet }: Props) {
                                     onClick={() => setSelected(convo)}
                                     className="flex-1 flex items-center gap-2 px-3 py-2.5 text-left min-w-0"
                                 >
-                                    <div className="w-8 h-8 rounded-full bg-primary/20 flex items-center justify-center flex-shrink-0">
-                                        <MessageCircle className="w-4 h-4 text-primary" />
+                                    <div className={`w-8 h-8 rounded-full flex items-center justify-center flex-shrink-0 ${isNoteToSelf ? "bg-amber-500/20" : "bg-primary/20"}`}>
+                                        <MessageCircle className={`w-4 h-4 ${isNoteToSelf ? "text-amber-500" : "text-primary"}`} />
                                     </div>
                                     <div className="min-w-0 flex-1">
-                                        <p className="text-xs font-medium text-foreground truncate">
-                                            {convo.name || other?.displayName || "Unknown"}
-                                        </p>
-                                        <p className="text-[10px] text-muted-foreground flex items-center gap-1">
-                                            <Lock className="w-2.5 h-2.5" /> End-to-end encrypted
+                                        <div className="flex items-center gap-1.5">
+                                            <p className="text-xs font-medium text-foreground truncate">
+                                                {displayName}
+                                            </p>
+                                            {(convo.unreadCount ?? 0) > 0 && (
+                                                <span className="flex-shrink-0 w-4 h-4 rounded-full bg-primary text-primary-foreground text-[9px] font-bold flex items-center justify-center">
+                                                    {convo.unreadCount! > 9 ? "9+" : convo.unreadCount}
+                                                </span>
+                                            )}
+                                        </div>
+                                        <p className="text-[10px] text-muted-foreground truncate">
+                                            {convo.lastMessagePreview || (
+                                                <span className="flex items-center gap-1">
+                                                    <Lock className="w-2.5 h-2.5" /> Encrypted
+                                                </span>
+                                            )}
                                         </p>
                                     </div>
                                 </button>
@@ -311,16 +288,26 @@ function ChatView({
     const [isLoading, setIsLoading] = useState(true);
     const [stagedMedia, setStagedMedia] = useState<{ file: File; previewUrl: string } | null>(null);
     const [spoiler, setSpoiler] = useState(false);
-    const [selfDestruct, setSelfDestruct] = useState(false);
     const [resolvedRecipient, setResolvedRecipient] = useState<Wallet | null>(null);
     const fileInputRef = useRef<HTMLInputElement>(null);
     const messagesEndRef = useRef<HTMLDivElement>(null);
     const prevCountRef = useRef(0);
 
-    const myIds = new Set([wallet.id, wallet.signingPublicKey, wallet.encryptionPublicKey].filter(Boolean));
-    const participantRecipient = conversation.participants?.find(p =>
-        !myIds.has(p.id) && !myIds.has(p.signingPublicKey) && !myIds.has(p.encryptionPublicKey)
+    const chatMyIds = new Set([wallet.id, wallet.signingPublicKey, wallet.encryptionPublicKey].filter(Boolean));
+    const chatIsSelf = (p: any) => chatMyIds.has(p.id) || chatMyIds.has(p.signingPublicKey || "") || chatMyIds.has(p.encryptionPublicKey || "");
+
+    const chatHasBot = conversation.name === "Quantum Bot" || conversation.participants?.some((p: any) => p.id?.startsWith("bot-"));
+    const isSelfConversation = !chatHasBot && (
+        conversation.name === "Note to Self" ||
+        (conversation.participants?.every((p: any) => chatIsSelf(p)) ?? false)
     );
+
+    let participantRecipient = isSelfConversation
+        ? { id: wallet.id, displayName: wallet.displayName, signingPublicKey: wallet.signingPublicKey, encryptionPublicKey: wallet.encryptionPublicKey }
+        : conversation.participants?.find((p: any) => !chatIsSelf(p));
+    if (!participantRecipient && wallet.displayName && conversation.participants?.length === 2) {
+        participantRecipient = conversation.participants.find((p: any) => p.displayName !== wallet.displayName);
+    }
     const recipient = participantRecipient || resolvedRecipient;
     const recipientMainId = recipient?.id || recipient?.signingPublicKey || "";
     const [blocked, setBlocked] = useState(() => recipientMainId ? isWalletBlocked(recipientMainId) : false);
@@ -340,10 +327,10 @@ function ChatView({
 
     useEffect(() => {
         if (!participantRecipient && conversation.participantIds) {
-            const otherId = conversation.participantIds.find(id => !myIds.has(id));
+            const otherId = conversation.participantIds.find(id => !chatMyIds.has(id));
             if (otherId) {
                 getWallets().then(wallets => {
-                    const match = wallets.find(w => w.id === otherId);
+                    const match = wallets.find(w => w.id === otherId || w.signingPublicKey === otherId);
                     if (match) setResolvedRecipient(match);
                 }).catch(() => {});
             }
@@ -374,7 +361,6 @@ function ChatView({
                     return m;
                 });
             });
-            markConversationRead(wallet, conversation.id, msgs).catch(() => {});
         } catch (err) { console.error(err); }
         setIsLoading(false);
     };
@@ -459,7 +445,7 @@ function ChatView({
             }
             const msg = await sendMessage(
                 conversation.id, textToSend, wallet, recipientKey,
-                selfDestruct, selfDestruct ? 30 : undefined, msgType, spoiler
+                false, undefined, msgType, spoiler
             );
             setMessages(prev => [...prev, msg]);
         } catch (err: any) {
@@ -468,7 +454,6 @@ function ChatView({
         }
         setIsSending(false);
         setSpoiler(false);
-        setSelfDestruct(false);
     };
 
     return (
@@ -483,13 +468,13 @@ function ChatView({
                 </div>
                 <div className="min-w-0 flex-1">
                     <p className="text-xs font-medium text-foreground truncate">
-                        {conversation.name || recipient?.displayName || "Unknown"}
+                        {isSelfConversation ? "Note to Self" : (conversation.name || recipient?.displayName || "Unknown")}
                     </p>
                     <p className="text-[10px] text-muted-foreground flex items-center gap-0.5">
                         <Lock className="w-2 h-2" /> ML-KEM-768 + ML-DSA-65
                     </p>
                 </div>
-                {recipient && (
+                {recipient && !isSelfConversation && (
                     <button
                         onClick={handleToggleBlock}
                         className={`p-1 rounded transition-colors flex-shrink-0 ${blocked ? "text-destructive bg-destructive/10" : "text-muted-foreground hover:text-destructive"}`}
@@ -557,7 +542,7 @@ function ChatView({
                     </div>
                 )}
 
-                {/* Spoiler + self-destruct toggles */}
+                {/* Spoiler toggle */}
                 <div className="px-2 pt-1.5 flex items-center gap-1.5">
                     <button
                         onClick={() => setSpoiler(!spoiler)}
@@ -568,17 +553,6 @@ function ChatView({
                     >
                         <EyeOff className="w-3 h-3" />
                         Spoiler
-                    </button>
-                    <button
-                        onClick={() => setSelfDestruct(!selfDestruct)}
-                        className={`flex items-center gap-1 px-2 py-0.5 rounded text-[10px] transition-colors ${selfDestruct
-                            ? "bg-destructive/20 text-destructive"
-                            : "text-muted-foreground hover:text-foreground"
-                            }`}
-                        title="Message deletes 30s after recipient opens it"
-                    >
-                        <Timer className="w-3 h-3" />
-                        {selfDestruct ? "30s" : "Self-destruct"}
                     </button>
                 </div>
 
@@ -622,132 +596,6 @@ function ChatView({
             </div>
         </div>
     );
-}
-
-type EmbedInfo = { type: "youtube" | "tiktok" | "x" | "instagram" | "spotify" | "soundcloud"; id: string; url: string };
-
-function detectEmbed(text: string): EmbedInfo | null {
-    const t = text.trim();
-    // YouTube
-    let m = t.match(/(?:youtube\.com\/watch\?.*v=|youtu\.be\/|youtube\.com\/shorts\/|youtube\.com\/embed\/)([a-zA-Z0-9_-]{11})/);
-    if (m) return { type: "youtube", id: m[1], url: t };
-    // TikTok
-    m = t.match(/tiktok\.com\/@[^/]+\/video\/(\d+)/);
-    if (m) return { type: "tiktok", id: m[1], url: t };
-    m = t.match(/(?:vm\.tiktok\.com|vt\.tiktok\.com)\/([a-zA-Z0-9]+)/);
-    if (m) return { type: "tiktok", id: m[1], url: t };
-    // X / Twitter
-    m = t.match(/(?:twitter\.com|x\.com)\/\w+\/status\/(\d+)/);
-    if (m) return { type: "x", id: m[1], url: t };
-    // Instagram post/reel
-    m = t.match(/instagram\.com\/(?:p|reel)\/([a-zA-Z0-9_-]+)/);
-    if (m) return { type: "instagram", id: m[1], url: t };
-    // Spotify track/album/playlist
-    m = t.match(/open\.spotify\.com\/(track|album|playlist|episode)\/([a-zA-Z0-9]+)/);
-    if (m) return { type: "spotify", id: `${m[1]}/${m[2]}`, url: t };
-    // SoundCloud
-    if (/soundcloud\.com\/[^/]+\/[^/\s]+/.test(t)) return { type: "soundcloud", id: "", url: t };
-    return null;
-}
-
-function EmbedCard({ embed, blurred }: { embed: EmbedInfo; blurred: boolean }) {
-    const blur = blurred ? "blur-xl" : "";
-    switch (embed.type) {
-        case "youtube":
-            return (
-                <iframe
-                    src={`https://www.youtube.com/embed/${embed.id}`}
-                    className={`w-full rounded aspect-video max-h-[140px] transition-all duration-300 ${blur}`}
-                    allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture"
-                    allowFullScreen style={{ border: "none" }}
-                />
-            );
-        case "tiktok":
-            return (
-                <a href={embed.url} target="_blank" rel="noopener noreferrer"
-                   className={`flex items-center gap-2 px-2 py-1.5 rounded-lg bg-black/20 border border-white/10 no-underline transition-all ${blur}`}>
-                    <div className="w-8 h-8 rounded-full bg-black flex items-center justify-center shrink-0">
-                        <span className="text-[10px] font-bold text-white">TT</span>
-                    </div>
-                    <div className="flex-1 min-w-0">
-                        <p className="text-[10px] font-semibold opacity-90">TikTok Video</p>
-                        <p className="text-[9px] opacity-50 truncate">{embed.url}</p>
-                    </div>
-                    <span className="text-[10px] opacity-60">▶</span>
-                </a>
-            );
-        case "x":
-            return (
-                <a href={embed.url} target="_blank" rel="noopener noreferrer"
-                   className={`flex items-center gap-2 px-2 py-1.5 rounded-lg bg-black/20 border border-white/10 no-underline transition-all ${blur}`}>
-                    <div className="w-8 h-8 rounded-full bg-black flex items-center justify-center shrink-0">
-                        <span className="text-sm font-bold text-white">𝕏</span>
-                    </div>
-                    <div className="flex-1 min-w-0">
-                        <p className="text-[10px] font-semibold opacity-90">Post on X</p>
-                        <p className="text-[9px] opacity-50 truncate">{embed.url}</p>
-                    </div>
-                    <span className="text-[10px] opacity-60">↗</span>
-                </a>
-            );
-        case "instagram":
-            return (
-                <a href={embed.url} target="_blank" rel="noopener noreferrer"
-                   className={`flex items-center gap-2 px-2 py-1.5 rounded-lg bg-gradient-to-r from-purple-900/20 to-pink-900/20 border border-pink-500/20 no-underline transition-all ${blur}`}>
-                    <div className="w-8 h-8 rounded-full bg-gradient-to-br from-purple-600 to-pink-500 flex items-center justify-center shrink-0">
-                        <span className="text-[10px] font-bold text-white">IG</span>
-                    </div>
-                    <div className="flex-1 min-w-0">
-                        <p className="text-[10px] font-semibold opacity-90">Instagram Post</p>
-                        <p className="text-[9px] opacity-50 truncate">{embed.url}</p>
-                    </div>
-                    <span className="text-[10px] opacity-60">↗</span>
-                </a>
-            );
-        case "spotify":
-            return (
-                <iframe
-                    src={`https://open.spotify.com/embed/${embed.id}?theme=0`}
-                    className={`w-full rounded-xl transition-all duration-300 ${blur}`}
-                    style={{ border: "none", height: 80 }}
-                    allow="encrypted-media"
-                />
-            );
-        case "soundcloud":
-            return (
-                <a href={embed.url} target="_blank" rel="noopener noreferrer"
-                   className={`flex items-center gap-2 px-2 py-1.5 rounded-lg bg-orange-900/20 border border-orange-500/20 no-underline transition-all ${blur}`}>
-                    <div className="w-8 h-8 rounded-full bg-orange-500 flex items-center justify-center shrink-0">
-                        <span className="text-[10px] font-bold text-white">SC</span>
-                    </div>
-                    <div className="flex-1 min-w-0">
-                        <p className="text-[10px] font-semibold opacity-90">SoundCloud</p>
-                        <p className="text-[9px] opacity-50 truncate">{embed.url}</p>
-                    </div>
-                    <span className="text-[10px] opacity-60">▶</span>
-                </a>
-            );
-        default:
-            return null;
-    }
-}
-
-function renderLinkedText(text: string): (string | JSX.Element)[] {
-    const urlRe = /(https?:\/\/[^\s]+)/g;
-    const parts: (string | JSX.Element)[] = [];
-    let last = 0;
-    let match: RegExpExecArray | null;
-    while ((match = urlRe.exec(text)) !== null) {
-        if (match.index > last) parts.push(text.slice(last, match.index));
-        const url = match[1];
-        parts.push(
-            <a key={match.index} href={url} target="_blank" rel="noopener noreferrer"
-               className="text-primary underline hover:text-primary/80 break-all">{url}</a>
-        );
-        last = match.index + url.length;
-    }
-    if (last < text.length) parts.push(text.slice(last));
-    return parts.length ? parts : [text];
 }
 
 // Compact message bubble with media + spoiler support
@@ -804,23 +652,11 @@ function MessageBubble({ msg, isOwn }: { msg: Message; isOwn: boolean }) {
                                     <p className="text-[9px] opacity-40 mt-0.5">{msg.mediaFileName}</p>
                                 )}
                             </div>
-                        ) : msg.plaintext && /^https?:\/\/\S+\.(gif|webp|png|jpe?g)(\?[^\s]*)?$/i.test(msg.plaintext.trim()) ? (
-                            <div className="my-1">
-                                <img
-                                    src={msg.plaintext.trim()}
-                                    alt="Image"
-                                    className={`max-w-full rounded max-h-[150px] object-contain transition-all duration-300 ${isSpoiler ? "blur-xl" : ""}`}
-                                />
-                            </div>
-                        ) : msg.plaintext && detectEmbed(msg.plaintext.trim()) ? (
-                            <div className="my-1">
-                                <EmbedCard embed={detectEmbed(msg.plaintext.trim())!} blurred={!!isSpoiler} />
-                            </div>
                         ) : (
                             <p className={`text-xs whitespace-pre-wrap break-words transition-all duration-300 ${isSpoiler ? "blur-md" : ""}`}>
                                 {msg.plaintext?.startsWith("[Unable") ? (
                                     <span className="italic opacity-60">{msg.plaintext}</span>
-                                ) : renderLinkedText(msg.plaintext || "")}
+                                ) : msg.plaintext}
                             </p>
                         )}
                     </div>
@@ -830,12 +666,10 @@ function MessageBubble({ msg, isOwn }: { msg: Message; isOwn: boolean }) {
                     <span className="opacity-50">{formatTime(msg.createdAt)}</span>
                     {msg.spoiler && <EyeOff className="w-2.5 h-2.5 opacity-50" />}
                     {msg.selfDestruct && <Timer className="w-2.5 h-2.5 text-destructive" />}
-                    {msg.signatureValid === true ? (
+                    {msg.signatureValid ? (
                         <CheckCircle2 className="w-2.5 h-2.5 text-success" />
-                    ) : msg.signatureValid === false ? (
-                        <XCircle className="w-2.5 h-2.5 text-destructive" />
                     ) : (
-                        <Shield className="w-2.5 h-2.5 text-muted-foreground opacity-50" />
+                        <XCircle className="w-2.5 h-2.5 text-destructive" />
                     )}
                 </div>
             </div>

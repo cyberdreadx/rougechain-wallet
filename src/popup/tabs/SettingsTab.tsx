@@ -1,6 +1,7 @@
-import { useState } from "react";
-import { Lock, LogOut, Globe, Clock, Download, Upload, Shield, ExternalLink, Copy, Check, EyeOff } from "lucide-react";
+import { useState, useMemo } from "react";
+import { Lock, LogOut, Globe, Clock, Download, Shield, ExternalLink, KeyRound, Copy, Check, Eye, EyeOff, Wallet } from "lucide-react";
 import type { UnifiedWallet } from "../../lib/unified-wallet";
+import { deriveEvmAccount } from "../../lib/evm-wallet";
 import {
     lockUnifiedWallet,
     clearUnifiedWallet,
@@ -27,9 +28,10 @@ export default function SettingsTab({ wallet, onLock, onDisconnect }: Props) {
     const [network, setNetwork] = useState<NetworkType>(getActiveNetwork());
     const [autoLock, setAutoLock] = useState(getVaultSettings().autoLockMinutes);
     const [showExport, setShowExport] = useState(false);
-    const [seedExpanded, setSeedExpanded] = useState(false);
-    const [seedRevealed, setSeedRevealed] = useState(false);
+    const [showSeedPhrase, setShowSeedPhrase] = useState(false);
     const [seedCopied, setSeedCopied] = useState(false);
+    const [evmCopied, setEvmCopied] = useState(false);
+    const evmAccount = useMemo(() => deriveEvmAccount(wallet.mnemonic), [wallet.mnemonic]);
 
     const handleLock = async () => {
         if (!lockPassword) return;
@@ -168,68 +170,99 @@ export default function SettingsTab({ wallet, onLock, onDisconnect }: Props) {
                 </div>
             </div>
 
-            {/* Recovery Phrase */}
-            {wallet.mnemonic && (
-                <div className="p-3 border-b border-border">
-                    <button
-                        onClick={() => { setSeedExpanded(!seedExpanded); if (seedExpanded) setSeedRevealed(false); }}
-                        className="flex items-center justify-between w-full"
-                    >
-                        <div className="flex items-center gap-2">
-                            <Shield className="w-3.5 h-3.5 text-warning" />
-                            <span className="text-xs font-medium text-foreground">Recovery Phrase</span>
-                        </div>
-                        <span className="text-[10px] text-muted-foreground">{seedExpanded ? "Collapse" : `${wallet.mnemonic.split(" ").length} words`}</span>
-                    </button>
-                    {seedExpanded && (
-                        <div className="mt-2 space-y-2">
-                            <div
-                                className="relative rounded-lg bg-warning/5 border border-warning/20 p-2.5 cursor-pointer select-none"
-                                onClick={() => !seedRevealed && setSeedRevealed(true)}
-                            >
-                                {!seedRevealed && (
-                                    <div className="absolute inset-0 rounded-lg bg-card/80 backdrop-blur-md flex flex-col items-center justify-center gap-1.5 z-10">
-                                        <EyeOff className="w-5 h-5 text-warning" />
-                                        <span className="text-[10px] font-medium text-warning">Tap to reveal</span>
-                                        <span className="text-[9px] text-muted-foreground">Make sure no one is watching</span>
-                                    </div>
-                                )}
-                                <div className={`grid grid-cols-3 gap-1.5 ${!seedRevealed ? "blur-lg" : ""} transition-all duration-300`}>
-                                    {wallet.mnemonic.split(" ").map((word, i) => (
-                                        <div key={i} className="flex items-center gap-1 px-2 py-1.5 rounded-md bg-background border border-border">
-                                            <span className="text-[9px] text-muted-foreground w-4 text-right">{i + 1}.</span>
-                                            <span className="text-[11px] font-mono text-foreground">{word}</span>
-                                        </div>
-                                    ))}
-                                </div>
-                            </div>
-                            {seedRevealed && (
-                                <button
-                                    onClick={() => {
-                                        navigator.clipboard.writeText(wallet.mnemonic!);
-                                        setSeedCopied(true);
-                                        setTimeout(() => setSeedCopied(false), 2000);
-                                    }}
-                                    className={`w-full py-1.5 rounded-lg text-xs font-medium transition-all flex items-center justify-center gap-1.5 ${
-                                        seedCopied
-                                            ? "bg-success/20 text-success"
-                                            : "bg-secondary text-secondary-foreground hover:bg-secondary/80"
-                                    }`}
-                                >
-                                    {seedCopied ? <><Check className="w-3 h-3" /> Copied!</> : <><Copy className="w-3 h-3" /> Copy to Clipboard</>}
-                                </button>
-                            )}
-                        </div>
-                    )}
+            {/* Base (EVM) address */}
+            <div className="p-3 border-b border-border space-y-2">
+                <div className="flex items-center gap-2">
+                    <Wallet className="w-3.5 h-3.5 text-primary" />
+                    <span className="text-xs font-medium text-foreground">Base Wallet (EVM)</span>
+                    <span className="text-[9px] px-1.5 py-0.5 rounded-full bg-blue-500/15 text-blue-400 border border-blue-500/20">for bridge</span>
                 </div>
-            )}
+                {evmAccount ? (
+                    <div className="space-y-1.5">
+                        <p className="text-[10px] text-muted-foreground">Same recovery phrase, derived at <span className="font-mono">m/44'/60'/0'/0/0</span>. Use it as your Base wallet on the bridge — fund it with ETH on Base for gas.</p>
+                        <div className="flex items-center gap-1.5 px-2 py-1.5 rounded-lg bg-muted/50 border border-border">
+                            <span className="text-[10px] font-mono text-foreground flex-1 truncate">{evmAccount.address}</span>
+                            <button
+                                onClick={async () => {
+                                    await navigator.clipboard.writeText(evmAccount.address);
+                                    setEvmCopied(true);
+                                    setTimeout(() => setEvmCopied(false), 2000);
+                                }}
+                                className="shrink-0 text-muted-foreground hover:text-foreground"
+                                title="Copy Base address"
+                            >
+                                {evmCopied ? <Check className="w-3.5 h-3.5" /> : <Copy className="w-3.5 h-3.5" />}
+                            </button>
+                            <a
+                                href={`https://basescan.org/address/${evmAccount.address}`}
+                                target="_blank"
+                                rel="noreferrer"
+                                className="shrink-0 text-muted-foreground hover:text-foreground"
+                                title="View on BaseScan"
+                            >
+                                <ExternalLink className="w-3.5 h-3.5" />
+                            </a>
+                        </div>
+                    </div>
+                ) : (
+                    <p className="text-[10px] text-muted-foreground">
+                        <KeyRound className="w-3 h-3 inline mr-1" />
+                        No Base account — this wallet has no recovery phrase. Create or import a seed-phrase wallet to use the bridge without MetaMask.
+                    </p>
+                )}
+            </div>
 
             {/* Backup */}
-            <div className="p-3 border-b border-border">
-                <div className="flex items-center gap-2 mb-2">
+            <div className="p-3 border-b border-border space-y-2">
+                <div className="flex items-center gap-2">
                     <Download className="w-3.5 h-3.5 text-primary" />
                     <span className="text-xs font-medium text-foreground">Backup</span>
                 </div>
+
+                {wallet.mnemonic ? (
+                    <div className="space-y-2">
+                        <button
+                            onClick={() => setShowSeedPhrase(!showSeedPhrase)}
+                            className="w-full py-1.5 rounded-lg bg-secondary text-secondary-foreground text-xs font-medium hover:bg-secondary/80 transition-colors flex items-center justify-center gap-1.5"
+                        >
+                            {showSeedPhrase ? <EyeOff className="w-3 h-3" /> : <Eye className="w-3 h-3" />}
+                            {showSeedPhrase ? "Hide Seed Phrase" : "View Seed Phrase"}
+                        </button>
+
+                        {showSeedPhrase && (
+                            <div className="space-y-2">
+                                <div className="grid grid-cols-3 gap-1">
+                                    {wallet.mnemonic.split(" ").map((word, i) => (
+                                        <div key={i} className="flex items-center gap-1 px-1.5 py-1 rounded bg-muted/50 border border-border">
+                                            <span className="text-[8px] text-muted-foreground w-3 text-right">{i + 1}.</span>
+                                            <span className="text-[10px] font-mono text-foreground">{word}</span>
+                                        </div>
+                                    ))}
+                                </div>
+                                <button
+                                    onClick={async () => {
+                                        if (wallet.mnemonic) {
+                                            await navigator.clipboard.writeText(wallet.mnemonic);
+                                            setSeedCopied(true);
+                                            setTimeout(() => setSeedCopied(false), 2000);
+                                        }
+                                    }}
+                                    className="w-full py-1.5 rounded-lg bg-muted text-muted-foreground text-[10px] font-medium hover:bg-muted/80 transition-colors flex items-center justify-center gap-1"
+                                >
+                                    {seedCopied ? <><Check className="w-3 h-3" /> Copied!</> : <><Copy className="w-3 h-3" /> Copy Phrase</>}
+                                </button>
+                            </div>
+                        )}
+                    </div>
+                ) : (
+                    <div className="p-2 rounded-lg bg-muted/30 border border-border">
+                        <p className="text-[10px] text-muted-foreground">
+                            <KeyRound className="w-3 h-3 inline mr-1" />
+                            No seed phrase — this wallet was created before mnemonic support. Use the encrypted backup below.
+                        </p>
+                    </div>
+                )}
+
                 <button
                     onClick={exportWallet}
                     className="w-full py-1.5 rounded-lg bg-secondary text-secondary-foreground text-xs font-medium hover:bg-secondary/80 transition-colors flex items-center justify-center gap-1.5"

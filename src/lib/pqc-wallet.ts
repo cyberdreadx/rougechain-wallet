@@ -217,29 +217,6 @@ export interface TokenMeta {
     creator: string;
     image?: string;
     description?: string;
-    website?: string;
-    twitter?: string;
-    discord?: string;
-    created_at?: number;
-    frozen?: boolean;
-    mintable?: boolean;
-    max_supply?: number;
-    total_minted?: number;
-}
-
-export interface TokenHolder {
-    address: string;
-    balance: number;
-    percentage: number;
-}
-
-export interface TokenHoldersInfo {
-    success: boolean;
-    holders: TokenHolder[];
-    total_supply: number;
-    circulating_supply: number;
-    shielded_supply: number;
-    burned_supply: number;
 }
 
 export async function getTokens(): Promise<TokenMeta[]> {
@@ -253,32 +230,6 @@ export async function getTokens(): Promise<TokenMeta[]> {
             return data.tokens || [];
         });
     } catch { return []; }
-}
-
-export async function getTokenMetadata(symbol: string): Promise<TokenMeta | null> {
-    const baseUrl = getCoreApiBaseUrl();
-    if (!baseUrl) return null;
-    try {
-        const res = await fetch(`${baseUrl}/token/${encodeURIComponent(symbol)}/metadata`, {
-            headers: getCoreApiHeaders(),
-        });
-        if (!res.ok) return null;
-        const data = await res.json();
-        if (!data || data.error || !data.symbol) return null;
-        return data as TokenMeta;
-    } catch { return null; }
-}
-
-export async function getTokenHolders(symbol: string): Promise<TokenHoldersInfo | null> {
-    const baseUrl = getCoreApiBaseUrl();
-    if (!baseUrl) return null;
-    try {
-        const res = await fetch(`${baseUrl}/token/${encodeURIComponent(symbol)}/holders`, {
-            headers: getCoreApiHeaders(),
-        });
-        if (!res.ok) return null;
-        return await res.json() as TokenHoldersInfo;
-    } catch { return null; }
 }
 
 export interface NftCollection {
@@ -337,61 +288,9 @@ export function invalidateNfts(): void {
     invalidate("nftCollections");
 }
 
-// Send transaction via v2 signed endpoint (client-side signing)
-export async function sendTransaction(
-    fromPrivateKey: string,
-    fromPublicKey: string,
-    toPublicKey: string,
-    amount: number,
-    symbol: string = "XRGE",
-    memo?: string
-): Promise<Block> {
-    const baseUrl = getCoreApiBaseUrl();
-    if (!baseUrl) throw new Error("Node not configured");
-
-    const { buildSignedRequest } = await import("./pqc-messenger");
-    const payload = {
-        type: "transfer",
-        from: fromPublicKey,
-        to: toPublicKey,
-        amount,
-        fee: BASE_TRANSFER_FEE,
-        token: symbol,
-        ...(memo ? { memo } : {}),
-    };
-    const signed = buildSignedRequest(fromPrivateKey, fromPublicKey, payload);
-
-    const res = await fetch(`${baseUrl}/v2/transfer`, {
-        method: "POST",
-        headers: { ...getCoreApiHeaders(), "Content-Type": "application/json" },
-        body: JSON.stringify(signed),
-    });
-
-    const text = await res.text();
-    if (!text) throw new Error(`Server returned empty response (status ${res.status})`);
-
-    let data;
-    try { data = JSON.parse(text); } catch { throw new Error(`Invalid response: ${text.substring(0, 100)}`); }
-
-    if (res.ok && data.success) {
-        invalidate("balance");
-        invalidate("blocks");
-        invalidate("tokens");
-        return {
-            index: 0,
-            timestamp: Date.now(),
-            data: JSON.stringify({ type: "transfer", from: fromPublicKey, to: toPublicKey, amount, token: symbol }),
-            previousHash: "",
-            hash: data.txId || "",
-            nonce: 0,
-            signature: "",
-            signerPublicKey: fromPublicKey,
-        };
-    }
-
-    if (data.error) throw new Error(data.error);
-    throw new Error(`Transaction failed: ${res.status} ${res.statusText}`);
-}
+// NOTE: XRGE/token transfers are submitted client-side signed via the node's
+// /api/v2/transfer endpoint (see WalletTab.handleSend). The old server-side-signing
+// /tx/submit endpoint is retired on-chain (returns 410 Gone), so it was removed here.
 
 // Claim faucet tokens
 export async function claimFaucet(publicKey: string): Promise<any> {
@@ -413,7 +312,52 @@ export async function claimFaucet(publicKey: string): Promise<any> {
     return res.json();
 }
 
-// ===== Shielded Transaction Types & Functions =====
+// ===== Shielded Transactions =====
+
+export interface ShieldedStats {
+    commitment_count: number;
+    nullifier_count: number;
+    active_notes: number;
+}
+
+export async function getShieldedStats(): Promise<ShieldedStats> {
+    const baseUrl = getCoreApiBaseUrl();
+    if (!baseUrl) return { commitment_count: 0, nullifier_count: 0, active_notes: 0 };
+    try {
+        const res = await fetch(`${baseUrl}/shielded/stats`, { headers: getCoreApiHeaders() });
+        if (!res.ok) throw new Error();
+        const data = await res.json();
+        return data;
+    } catch {
+        return { commitment_count: 0, nullifier_count: 0, active_notes: 0 };
+    }
+}
+
+// Client-side commitment crypto (mirrors Rust commitment.rs)
+const COMMITMENT_DOMAIN = new TextEncoder().encode("ROUGECHAIN_COMMITMENT_V1");
+const NULLIFIER_DOMAIN = new TextEncoder().encode("ROUGECHAIN_NULLIFIER_V1");
+
+function hexToU8(hex: string): Uint8Array {
+    const bytes = new Uint8Array(hex.length / 2);
+    for (let i = 0; i < bytes.length; i++) bytes[i] = parseInt(hex.slice(i * 2, i * 2 + 2), 16);
+    return bytes;
+}
+function u8ToHex(bytes: Uint8Array): string {
+    return Array.from(bytes).map(b => b.toString(16).padStart(2, "0")).join("");
+}
+function u64ToBytes(v: number): Uint8Array {
+    const buf = new Uint8Array(8);
+    new DataView(buf.buffer).setBigUint64(0, BigInt(v), false);
+    return buf;
+}
+function concat(...a: Uint8Array[]): Uint8Array {
+    const out = new Uint8Array(a.reduce((s, x) => s + x.length, 0));
+    let o = 0; for (const x of a) { out.set(x, o); o += x.length; }
+    return out;
+}
+async function sha256(data: Uint8Array): Promise<Uint8Array> {
+    return new Uint8Array(await crypto.subtle.digest("SHA-256", data.buffer as ArrayBuffer));
+}
 
 export interface ShieldedNote {
     commitment: string;
@@ -423,12 +367,15 @@ export interface ShieldedNote {
     ownerPubKey: string;
 }
 
-export interface ShieldedStats {
-    success: boolean;
-    commitment_count: number;
-    nullifier_count: number;
-    active_notes: number;
+export async function createShieldedNote(value: number, ownerPubKey: string): Promise<ShieldedNote> {
+    const randBytes = new Uint8Array(32); crypto.getRandomValues(randBytes);
+    const randomness = u8ToHex(randBytes);
+    const commitment = u8ToHex(await sha256(concat(COMMITMENT_DOMAIN, u64ToBytes(value), hexToU8(ownerPubKey), randBytes)));
+    const nullifier = u8ToHex(await sha256(concat(NULLIFIER_DOMAIN, randBytes, hexToU8(commitment))));
+    return { commitment, nullifier, value, randomness, ownerPubKey };
 }
+
+// ===== Note Persistence (localStorage) =====
 
 export interface StoredNote extends ShieldedNote {
     createdAt: number;
@@ -436,92 +383,33 @@ export interface StoredNote extends ShieldedNote {
     spentAt?: number;
 }
 
-// --- Crypto helpers (Web Crypto API, no external deps) ---
-
-const COMMITMENT_DOMAIN = new TextEncoder().encode("ROUGECHAIN_COMMITMENT_V1");
-const NULLIFIER_DOMAIN  = new TextEncoder().encode("ROUGECHAIN_NULLIFIER_V1");
 const NOTE_STORE_KEY = "pqc-shielded-notes";
 
-function hexToU8(hex: string): Uint8Array {
-    const clean = hex.startsWith("0x") ? hex.slice(2) : hex;
-    const bytes = new Uint8Array(clean.length / 2);
-    for (let i = 0; i < bytes.length; i++) bytes[i] = parseInt(clean.slice(i * 2, i * 2 + 2), 16);
-    return bytes;
+function noteStoreKey(): string {
+    // Browser extension doesn't use getActiveNetwork, so just use a static key
+    return NOTE_STORE_KEY;
 }
 
-function u8ToHex(bytes: Uint8Array): string {
-    return Array.from(bytes).map(b => b.toString(16).padStart(2, "0")).join("");
-}
-
-function u64ToBytes(value: number): Uint8Array {
-    const buf = new Uint8Array(8);
-    const view = new DataView(buf.buffer);
-    view.setBigUint64(0, BigInt(value), false);
-    return buf;
-}
-
-function concat(...arrs: Uint8Array[]): Uint8Array {
-    const total = arrs.reduce((s, a) => s + a.length, 0);
-    const result = new Uint8Array(total);
-    let offset = 0;
-    for (const a of arrs) { result.set(a, offset); offset += a.length; }
-    return result;
-}
-
-async function sha256(data: Uint8Array): Promise<Uint8Array> {
-    const hash = await crypto.subtle.digest("SHA-256", data.buffer as ArrayBuffer);
-    return new Uint8Array(hash);
-}
-
-export async function createShieldedNote(value: number, ownerPubKey: string): Promise<ShieldedNote> {
-    const randBytes = new Uint8Array(32);
-    crypto.getRandomValues(randBytes);
-    const randomness = u8ToHex(randBytes);
-
-    const commitInput = concat(COMMITMENT_DOMAIN, u64ToBytes(value), hexToU8(ownerPubKey), randBytes);
-    const commitment = u8ToHex(await sha256(commitInput));
-
-    const nullInput = concat(NULLIFIER_DOMAIN, randBytes, hexToU8(commitment));
-    const nullifier = u8ToHex(await sha256(nullInput));
-
-    return { commitment, nullifier, value, randomness, ownerPubKey };
-}
-
-// --- Shielded stats API ---
-
-export async function getShieldedStats(): Promise<ShieldedStats> {
-    const baseUrl = getCoreApiBaseUrl();
-    if (!baseUrl) return { success: false, commitment_count: 0, nullifier_count: 0, active_notes: 0 };
+function loadAllNotes(): StoredNote[] {
     try {
-        const res = await fetch(`${baseUrl}/shielded/stats`, { headers: getCoreApiHeaders() });
-        return await res.json();
-    } catch {
-        return { success: false, commitment_count: 0, nullifier_count: 0, active_notes: 0 };
-    }
-}
-
-// --- Note store (localStorage) ---
-
-function loadNotes(): StoredNote[] {
-    try {
-        const raw = localStorage.getItem(NOTE_STORE_KEY);
+        const raw = localStorage.getItem(noteStoreKey());
         return raw ? JSON.parse(raw) : [];
     } catch { return []; }
 }
 
 function persistNotes(notes: StoredNote[]): void {
-    localStorage.setItem(NOTE_STORE_KEY, JSON.stringify(notes));
+    localStorage.setItem(noteStoreKey(), JSON.stringify(notes));
 }
 
 export function saveNote(note: ShieldedNote): void {
-    const notes = loadNotes();
+    const notes = loadAllNotes();
     if (notes.some(n => n.commitment === note.commitment)) return;
     notes.push({ ...note, createdAt: Date.now(), spent: false });
     persistNotes(notes);
 }
 
 export function getActiveNotes(ownerPubKey: string): StoredNote[] {
-    return loadNotes().filter(n => n.ownerPubKey === ownerPubKey && !n.spent);
+    return loadAllNotes().filter(n => n.ownerPubKey === ownerPubKey && !n.spent);
 }
 
 export function getShieldedBalance(ownerPubKey: string): number {
@@ -529,11 +417,9 @@ export function getShieldedBalance(ownerPubKey: string): number {
 }
 
 export function markNoteSpent(nullifier: string): void {
-    const notes = loadNotes();
+    const notes = loadAllNotes();
     const note = notes.find(n => n.nullifier === nullifier);
-    if (note) {
-        note.spent = true;
-        note.spentAt = Date.now();
-        persistNotes(notes);
-    }
+    if (note) { note.spent = true; note.spentAt = Date.now(); persistNotes(notes); }
 }
+
+
