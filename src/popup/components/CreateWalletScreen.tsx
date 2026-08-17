@@ -1,37 +1,37 @@
 import { useState } from "react";
-import { Loader2, Plus, Upload, KeyRound, Eye, EyeOff, Copy, Check, ShieldAlert, ArrowRight, Lock } from "lucide-react";
+import { Loader2, Plus, Upload, KeyRound, Copy, Check, AlertTriangle, ArrowLeft } from "lucide-react";
 import { generateEncryptionKeypair, registerWalletOnNode } from "../../lib/pqc-messenger";
-import { saveUnifiedWallet, lockUnifiedWallet, type UnifiedWallet } from "../../lib/unified-wallet";
-import { generateMnemonic, keypairFromMnemonic } from "../../lib/mnemonic";
-import { reverseLookup } from "../../lib/pqc-mail";
+import { saveUnifiedWallet, type UnifiedWallet } from "../../lib/unified-wallet";
+import { generateMnemonic, keypairFromMnemonic, validateMnemonic } from "../../lib/mnemonic";
 
 interface Props {
     onCreated: (wallet: UnifiedWallet) => void;
 }
 
+type Screen = "home" | "show-seed" | "import-seed";
+
 export default function CreateWalletScreen({ onCreated }: Props) {
     const [name, setName] = useState("");
     const [isCreating, setIsCreating] = useState(false);
-    const [showImport, setShowImport] = useState(false);
-
-    const [backupWallet, setBackupWallet] = useState<UnifiedWallet | null>(null);
-    const [seedRevealed, setSeedRevealed] = useState(false);
+    const [screen, setScreen] = useState<Screen>("home");
+    const [mnemonic, setMnemonic] = useState("");
+    const [pendingWallet, setPendingWallet] = useState<UnifiedWallet | null>(null);
     const [seedCopied, setSeedCopied] = useState(false);
+    const [seedConfirmed, setSeedConfirmed] = useState(false);
 
-    // Password setup step
-    const [showPasswordStep, setShowPasswordStep] = useState(false);
-    const [password, setPassword] = useState("");
-    const [confirmPassword, setConfirmPassword] = useState("");
-    const [passwordError, setPasswordError] = useState("");
-    const [isLocking, setIsLocking] = useState(false);
+    // Seed phrase import state
+    const [importPhrase, setImportPhrase] = useState("");
+    const [importName, setImportName] = useState("");
+    const [importError, setImportError] = useState("");
+    const [isRecovering, setIsRecovering] = useState(false);
 
     const handleCreate = async () => {
         if (!name.trim() || isCreating) return;
         setIsCreating(true);
 
         try {
-            const mnemonic = generateMnemonic();
-            const { publicKey, secretKey } = keypairFromMnemonic(mnemonic);
+            const phrase = generateMnemonic();
+            const { publicKey: signingPublicKey, secretKey: signingPrivateKey } = keypairFromMnemonic(phrase);
             const encKeypair = generateEncryptionKeypair();
             const id = crypto.randomUUID();
 
@@ -39,12 +39,74 @@ export default function CreateWalletScreen({ onCreated }: Props) {
                 id,
                 displayName: name.trim(),
                 createdAt: Date.now(),
-                signingPublicKey: publicKey,
-                signingPrivateKey: secretKey,
+                signingPublicKey,
+                signingPrivateKey,
                 encryptionPublicKey: encKeypair.publicKey,
                 encryptionPrivateKey: encKeypair.privateKey,
                 version: 3,
-                mnemonic,
+                mnemonic: phrase,
+            };
+
+            setMnemonic(phrase);
+            setPendingWallet(wallet);
+            setScreen("show-seed");
+        } catch (err) {
+            console.error("Wallet creation failed:", err);
+        }
+        setIsCreating(false);
+    };
+
+    const handleConfirmSeed = async () => {
+        if (!pendingWallet) return;
+
+        saveUnifiedWallet(pendingWallet);
+
+        try {
+            await registerWalletOnNode({
+                id: pendingWallet.id,
+                displayName: pendingWallet.displayName,
+                signingPublicKey: pendingWallet.signingPublicKey,
+                encryptionPublicKey: pendingWallet.encryptionPublicKey,
+            });
+        } catch { /* Node may be unavailable */ }
+
+        onCreated(pendingWallet);
+    };
+
+    const handleCopySeed = async () => {
+        await navigator.clipboard.writeText(mnemonic);
+        setSeedCopied(true);
+        setTimeout(() => setSeedCopied(false), 2000);
+    };
+
+    const handleImportSeed = async () => {
+        const trimmed = importPhrase.trim().toLowerCase().replace(/\s+/g, " ");
+        if (!importName.trim()) {
+            setImportError("Enter a wallet name");
+            return;
+        }
+        if (!validateMnemonic(trimmed)) {
+            setImportError("Invalid seed phrase — check for typos");
+            return;
+        }
+
+        setIsRecovering(true);
+        setImportError("");
+
+        try {
+            const { publicKey: signingPublicKey, secretKey: signingPrivateKey } = keypairFromMnemonic(trimmed);
+            const encKeypair = generateEncryptionKeypair();
+
+            const wallet: UnifiedWallet = {
+                id: crypto.randomUUID(),
+                displayName: importName.trim(),
+                createdAt: Date.now(),
+                signingPublicKey,
+                signingPrivateKey,
+                encryptionPublicKey: encKeypair.publicKey,
+                encryptionPrivateKey: encKeypair.privateKey,
+                version: 3,
+                mnemonic: trimmed,
             };
 
             saveUnifiedWallet(wallet);
@@ -56,23 +118,17 @@ export default function CreateWalletScreen({ onCreated }: Props) {
                     signingPublicKey: wallet.signingPublicKey,
                     encryptionPublicKey: wallet.encryptionPublicKey,
                 });
-            } catch { /* Node may be unavailable — that's okay */ }
+            } catch { /* Node may be unavailable */ }
 
-            setBackupWallet(wallet);
+            onCreated(wallet);
         } catch (err) {
-            console.error("Wallet creation failed:", err);
+            console.error("Recovery failed:", err);
+            setImportError("Recovery failed — try again");
         }
-        setIsCreating(false);
+        setIsRecovering(false);
     };
 
-    const copySeed = () => {
-        if (!backupWallet?.mnemonic) return;
-        navigator.clipboard.writeText(backupWallet.mnemonic);
-        setSeedCopied(true);
-        setTimeout(() => setSeedCopied(false), 2000);
-    };
-
-    const handleImport = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const handleImportFile = async (e: React.ChangeEvent<HTMLInputElement>) => {
         const file = e.target.files?.[0];
         if (!file) return;
 
@@ -84,208 +140,125 @@ export default function CreateWalletScreen({ onCreated }: Props) {
                 return;
             }
             saveUnifiedWallet(wallet);
-            setBackupWallet(wallet);
-            setShowPasswordStep(true);
+            onCreated(wallet);
         } catch {
             alert("Failed to import wallet");
         }
     };
 
-    const [showSeedImport, setShowSeedImport] = useState(false);
-    const [seedPhrase, setSeedPhrase] = useState("");
-    const [seedError, setSeedError] = useState("");
-    const [isRecovering, setIsRecovering] = useState(false);
-
-    const handleSeedRecover = async () => {
-        const trimmed = seedPhrase.trim().toLowerCase();
-        const words = trimmed.split(/\s+/);
-        if (words.length !== 12 && words.length !== 24) {
-            setSeedError("Seed phrase must be 12 or 24 words");
-            return;
-        }
-        const { validateMnemonic: validate, keypairFromMnemonic: recover } = await import("../../lib/mnemonic");
-        if (!validate(trimmed)) {
-            setSeedError("Invalid seed phrase — check for typos");
-            return;
-        }
-        setSeedError("");
-        setIsRecovering(true);
-        try {
-            const { publicKey, secretKey } = recover(trimmed);
-            const { generateEncryptionKeypair } = await import("../../lib/pqc-messenger");
-            const encKeypair = generateEncryptionKeypair();
-
-            let resolvedName = name.trim();
-            if (!resolvedName) {
-                try {
-                    const nodeName = await reverseLookup(publicKey);
-                    if (nodeName) resolvedName = nodeName;
-                } catch { /* node may be unreachable */ }
-            }
-
-            const wallet: UnifiedWallet = {
-                id: crypto.randomUUID(),
-                displayName: resolvedName || "Recovered Wallet",
-                createdAt: Date.now(),
-                signingPublicKey: publicKey,
-                signingPrivateKey: secretKey,
-                encryptionPublicKey: encKeypair.publicKey,
-                encryptionPrivateKey: encKeypair.privateKey,
-                version: 3,
-                mnemonic: trimmed,
-            };
-            saveUnifiedWallet(wallet);
-            setBackupWallet(wallet);
-            setShowPasswordStep(true);
-        } catch (err) {
-            console.error("Recovery failed:", err);
-            setSeedError("Recovery failed — please try again");
-        }
-        setIsRecovering(false);
-    };
-
-    // ─── Password setup step (must be checked BEFORE seed backup screen) ───
-    if (showPasswordStep && backupWallet) {
-        const handleSetPassword = async () => {
-            if (password.length < 6) {
-                setPasswordError("Password must be at least 6 characters");
-                return;
-            }
-            if (password !== confirmPassword) {
-                setPasswordError("Passwords don't match");
-                return;
-            }
-            setPasswordError("");
-            setIsLocking(true);
-            try {
-                saveUnifiedWallet(backupWallet);
-                await lockUnifiedWallet(password);
-                onCreated(backupWallet);
-            } catch (err) {
-                console.error("Failed to set password:", err);
-                setPasswordError("Failed to encrypt wallet");
-            }
-            setIsLocking(false);
-        };
-
+    // Show seed phrase screen
+    if (screen === "show-seed" && pendingWallet) {
+        const words = mnemonic.split(" ");
         return (
-            <div className="flex flex-col items-center justify-center h-full p-6 bg-background">
-                <Lock className="w-10 h-10 text-primary mb-3" />
-                <h1 className="text-lg font-bold text-foreground mb-1">Set a Password</h1>
-                <p className="text-[11px] text-muted-foreground text-center mb-6 max-w-xs">
-                    Your password encrypts the wallet on this device. You'll need it to unlock the extension.
-                </p>
-
-                <div className="w-full max-w-xs space-y-3">
-                    <input
-                        type="password"
-                        placeholder="Create password (min 6 characters)"
-                        value={password}
-                        onChange={e => { setPassword(e.target.value); setPasswordError(""); }}
-                        className="w-full px-4 py-2.5 rounded-xl bg-input border border-border text-sm text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-primary/50"
-                    />
-                    <input
-                        type="password"
-                        placeholder="Confirm password"
-                        value={confirmPassword}
-                        onChange={e => { setConfirmPassword(e.target.value); setPasswordError(""); }}
-                        onKeyDown={e => e.key === "Enter" && handleSetPassword()}
-                        className="w-full px-4 py-2.5 rounded-xl bg-input border border-border text-sm text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-primary/50"
-                    />
-
-                    {passwordError && (
-                        <p className="text-[10px] text-destructive text-center">{passwordError}</p>
-                    )}
-
-                    <button
-                        onClick={handleSetPassword}
-                        disabled={!password || !confirmPassword || isLocking}
-                        className="w-full py-2.5 rounded-xl bg-primary text-primary-foreground text-sm font-medium hover:bg-primary/90 disabled:opacity-50 transition-colors flex items-center justify-center gap-2"
-                    >
-                        {isLocking ? (
-                            <><Loader2 className="w-4 h-4 animate-spin" /> Encrypting...</>
-                        ) : (
-                            <><Lock className="w-4 h-4" /> Set Password & Continue</>
-                        )}
+            <div className="flex flex-col h-full p-4 bg-background overflow-y-auto">
+                <div className="flex items-center gap-2 mb-4">
+                    <button onClick={() => setScreen("home")} className="p-1 rounded hover:bg-muted">
+                        <ArrowLeft className="w-4 h-4" />
                     </button>
+                    <h2 className="text-sm font-bold">Recovery Phrase</h2>
                 </div>
 
-                <p className="text-[9px] text-muted-foreground text-center mt-4 max-w-xs">
-                    Your password is never sent anywhere. It's used locally to encrypt your private keys with AES-256-GCM.
-                </p>
-            </div>
-        );
-    }
-
-    // ─── Seed backup screen (only for NEW wallets, not imports) ───
-    if (backupWallet && !showPasswordStep) {
-        const words = backupWallet.mnemonic?.split(" ") || [];
-        return (
-            <div className="flex flex-col items-center h-full p-6 bg-background overflow-y-auto">
-                <ShieldAlert className="w-10 h-10 text-warning mb-3" />
-                <h1 className="text-lg font-bold text-foreground mb-1">Back Up Your Seed Phrase</h1>
-                <p className="text-[11px] text-muted-foreground text-center mb-4 max-w-xs">
-                    This is the <span className="text-warning font-semibold">only way</span> to recover your wallet.
-                    Write it down and store it somewhere safe. Never share it.
-                </p>
-
-                <div
-                    className="relative w-full max-w-xs rounded-xl border border-border bg-card p-3 cursor-pointer select-none"
-                    onClick={() => !seedRevealed && setSeedRevealed(true)}
-                >
-                    {!seedRevealed && (
-                        <div className="absolute inset-0 rounded-xl bg-card/80 backdrop-blur-md flex flex-col items-center justify-center gap-2 z-10">
-                            <EyeOff className="w-6 h-6 text-warning" />
-                            <span className="text-xs font-medium text-warning">Click to reveal</span>
-                            <span className="text-[10px] text-muted-foreground">Make sure no one is watching</span>
-                        </div>
-                    )}
-                    <div className={`grid grid-cols-3 gap-1.5 ${!seedRevealed ? "blur-lg" : ""} transition-all duration-300`}>
-                        {words.map((word, i) => (
-                            <div key={i} className="flex items-center gap-1 px-2 py-1 rounded-lg bg-secondary/50 text-[10px] font-mono">
-                                <span className="text-muted-foreground w-4 text-right">{i + 1}.</span>
-                                <span className="text-foreground">{word}</span>
-                            </div>
-                        ))}
+                <div className="p-2.5 rounded-lg bg-destructive/10 border border-destructive/30 mb-3">
+                    <div className="flex items-start gap-2">
+                        <AlertTriangle className="w-4 h-4 text-destructive shrink-0 mt-0.5" />
+                        <p className="text-[11px] text-muted-foreground leading-relaxed">
+                            Write these words down and store them safely. <span className="text-destructive font-medium">Never share them.</span> Anyone with this phrase can access your wallet.
+                        </p>
                     </div>
                 </div>
 
-                <div className="w-full max-w-xs space-y-2 mt-4">
-                    <button
-                        onClick={copySeed}
-                        disabled={!seedRevealed}
-                        className={`w-full py-2 rounded-xl text-sm font-medium flex items-center justify-center gap-2 transition-all ${
-                            seedCopied
-                                ? "bg-success/20 text-success"
-                                : seedRevealed
-                                    ? "bg-secondary text-secondary-foreground hover:bg-secondary/80"
-                                    : "bg-secondary/30 text-muted-foreground cursor-not-allowed"
-                        }`}
-                    >
-                        {seedCopied ? <><Check className="w-4 h-4" /> Copied to clipboard</> : <><Copy className="w-4 h-4" /> Copy Seed Phrase</>}
-                    </button>
-
-                    <button
-                        onClick={() => setShowPasswordStep(true)}
-                        disabled={!seedRevealed}
-                        className={`w-full py-2.5 rounded-xl text-sm font-medium flex items-center justify-center gap-2 transition-all ${
-                            seedRevealed
-                                ? "bg-primary text-primary-foreground hover:bg-primary/90"
-                                : "bg-primary/30 text-primary-foreground/50 cursor-not-allowed"
-                        }`}
-                    >
-                        I've saved my seed phrase <ArrowRight className="w-4 h-4" />
-                    </button>
+                <div className="grid grid-cols-3 gap-1.5 mb-3">
+                    {words.map((word, i) => (
+                        <div key={i} className="flex items-center gap-1 px-2 py-1.5 rounded-lg bg-muted/50 border border-border">
+                            <span className="text-[9px] text-muted-foreground w-4 text-right">{i + 1}.</span>
+                            <span className="text-[11px] font-mono text-foreground">{word}</span>
+                        </div>
+                    ))}
                 </div>
 
-                <p className="text-[9px] text-destructive/70 text-center mt-3 max-w-xs">
-                    If you lose this phrase, your wallet cannot be recovered.
-                    RougeChain cannot help you retrieve it.
+                <button
+                    onClick={handleCopySeed}
+                    className="w-full py-2 rounded-lg bg-secondary text-secondary-foreground text-xs font-medium hover:bg-secondary/80 transition-colors flex items-center justify-center gap-1.5 mb-3"
+                >
+                    {seedCopied ? <><Check className="w-3.5 h-3.5" /> Copied!</> : <><Copy className="w-3.5 h-3.5" /> Copy to Clipboard</>}
+                </button>
+
+                <label className="flex items-center gap-2 mb-3 cursor-pointer">
+                    <input
+                        type="checkbox"
+                        checked={seedConfirmed}
+                        onChange={e => setSeedConfirmed(e.target.checked)}
+                        className="rounded border-border"
+                    />
+                    <span className="text-[11px] text-muted-foreground">I've saved my recovery phrase</span>
+                </label>
+
+                <button
+                    onClick={handleConfirmSeed}
+                    disabled={!seedConfirmed}
+                    className="w-full py-2.5 rounded-xl bg-primary text-primary-foreground text-sm font-medium hover:bg-primary/90 disabled:opacity-50 transition-colors"
+                >
+                    Continue
+                </button>
+
+                <p className="text-[10px] text-muted-foreground text-center mt-3">
+                    BIP-39 → HKDF-SHA256 → ML-DSA-65 derivation
                 </p>
             </div>
         );
     }
 
+    // Seed phrase import screen
+    if (screen === "import-seed") {
+        return (
+            <div className="flex flex-col h-full p-4 bg-background overflow-y-auto">
+                <div className="flex items-center gap-2 mb-4">
+                    <button onClick={() => { setScreen("home"); setImportError(""); }} className="p-1 rounded hover:bg-muted">
+                        <ArrowLeft className="w-4 h-4" />
+                    </button>
+                    <h2 className="text-sm font-bold">Import from Seed Phrase</h2>
+                </div>
+
+                <input
+                    type="text"
+                    placeholder="Wallet name"
+                    value={importName}
+                    onChange={e => setImportName(e.target.value)}
+                    className="w-full px-3 py-2 rounded-lg bg-input border border-border text-sm text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-primary/50 mb-2"
+                />
+
+                <textarea
+                    placeholder="Enter your 24-word recovery phrase..."
+                    value={importPhrase}
+                    onChange={e => { setImportPhrase(e.target.value); setImportError(""); }}
+                    rows={4}
+                    className="w-full px-3 py-2 rounded-lg bg-input border border-border text-sm font-mono text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-primary/50 mb-2 resize-none"
+                />
+
+                {importError && (
+                    <p className="text-xs text-destructive mb-2">{importError}</p>
+                )}
+
+                <button
+                    onClick={handleImportSeed}
+                    disabled={!importPhrase.trim() || !importName.trim() || isRecovering}
+                    className="w-full py-2.5 rounded-xl bg-primary text-primary-foreground text-sm font-medium hover:bg-primary/90 disabled:opacity-50 transition-colors flex items-center justify-center gap-2"
+                >
+                    {isRecovering ? (
+                        <><Loader2 className="w-4 h-4 animate-spin" /> Recovering...</>
+                    ) : (
+                        <><KeyRound className="w-4 h-4" /> Recover Wallet</>
+                    )}
+                </button>
+
+                <p className="text-[10px] text-muted-foreground text-center mt-3">
+                    Same seed phrase always derives the same ML-DSA-65 keypair
+                </p>
+            </div>
+        );
+    }
+
+    // Home screen
     return (
         <div className="flex flex-col items-center justify-center h-full p-6 bg-background">
             <div className="logo-ring w-16 h-16 mb-4">
@@ -322,55 +295,21 @@ export default function CreateWalletScreen({ onCreated }: Props) {
 
                 <div className="relative flex items-center gap-2 py-2">
                     <div className="flex-1 h-px bg-border" />
-                    <span className="text-[10px] text-muted-foreground">or recover</span>
+                    <span className="text-[10px] text-muted-foreground">or</span>
                     <div className="flex-1 h-px bg-border" />
                 </div>
 
-                {/* Seed phrase recovery */}
-                {showSeedImport ? (
-                    <div className="space-y-2">
-                        <textarea
-                            placeholder="Enter your 24-word recovery phrase..."
-                            value={seedPhrase}
-                            onChange={e => { setSeedPhrase(e.target.value); setSeedError(""); }}
-                            rows={3}
-                            className="w-full px-3 py-2 rounded-xl bg-input border border-border text-xs text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-primary/50 resize-none font-mono"
-                        />
-                        {seedError && (
-                            <p className="text-[10px] text-destructive">{seedError}</p>
-                        )}
-                        <button
-                            onClick={handleSeedRecover}
-                            disabled={!seedPhrase.trim() || isRecovering}
-                            className="w-full py-2 rounded-xl bg-warning/20 text-warning text-sm font-medium hover:bg-warning/30 disabled:opacity-50 transition-colors flex items-center justify-center gap-2"
-                        >
-                            {isRecovering ? (
-                                <><Loader2 className="w-4 h-4 animate-spin" /> Recovering...</>
-                            ) : (
-                                "Recover Wallet"
-                            )}
-                        </button>
-                        <button
-                            onClick={() => { setShowSeedImport(false); setSeedError(""); setSeedPhrase(""); }}
-                            className="w-full py-1.5 text-[10px] text-muted-foreground hover:text-foreground transition-colors"
-                        >
-                            Cancel
-                        </button>
-                    </div>
-                ) : (
-                    <div className="space-y-2">
-                        <button
-                            onClick={() => setShowSeedImport(true)}
-                            className="w-full py-2.5 rounded-xl bg-secondary text-secondary-foreground text-sm font-medium hover:bg-secondary/80 transition-colors flex items-center justify-center gap-2"
-                        >
-                            <KeyRound className="w-4 h-4" /> Import from Seed Phrase
-                        </button>
-                        <label className="w-full py-2.5 rounded-xl bg-secondary/50 text-secondary-foreground text-sm font-medium hover:bg-secondary/60 transition-colors flex items-center justify-center gap-2 cursor-pointer">
-                            <Upload className="w-4 h-4" /> Import JSON File
-                            <input type="file" accept=".json" onChange={handleImport} className="hidden" />
-                        </label>
-                    </div>
-                )}
+                <button
+                    onClick={() => setScreen("import-seed")}
+                    className="w-full py-2.5 rounded-xl bg-secondary text-secondary-foreground text-sm font-medium hover:bg-secondary/80 transition-colors flex items-center justify-center gap-2"
+                >
+                    <KeyRound className="w-4 h-4" /> Import from Seed Phrase
+                </button>
+
+                <label className="w-full py-2.5 rounded-xl bg-muted text-muted-foreground text-sm font-medium hover:bg-muted/80 transition-colors flex items-center justify-center gap-2 cursor-pointer">
+                    <Upload className="w-4 h-4" /> Import Backup File
+                    <input type="file" accept=".json,.pqcbackup" onChange={handleImportFile} className="hidden" />
+                </label>
             </div>
 
             <p className="text-[10px] text-muted-foreground text-center mt-6 max-w-xs">

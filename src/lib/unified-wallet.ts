@@ -58,7 +58,7 @@ function ensureCorrectKeys(wallet: UnifiedWallet): UnifiedWallet {
     // Check encryption key sizes match FIPS 203 ML-KEM-768
     const encPrivBytes = updated.encryptionPrivateKey ? updated.encryptionPrivateKey.length / 2 : 0;
     const needsEncRegen = !updated.encryptionPublicKey || !updated.encryptionPrivateKey ||
-        encPrivBytes !== ML_KEM768_SECRET_KEY_BYTES || (updated.version || 0) < 3;
+        encPrivBytes !== ML_KEM768_SECRET_KEY_BYTES;
 
     if (needsEncRegen) {
         console.warn(`[Vault] Encryption key size mismatch or missing. Regenerating FIPS 203 keys.`);
@@ -82,7 +82,7 @@ async function deriveKey(password: string, salt: Uint8Array): Promise<CryptoKey>
         "raw", encoder.encode(password), "PBKDF2", false, ["deriveKey"]
     );
     return crypto.subtle.deriveKey(
-        { name: "PBKDF2", salt, iterations: 600_000, hash: "SHA-256" },
+        { name: "PBKDF2", salt: salt.buffer as ArrayBuffer, iterations: 600_000, hash: "SHA-256" },
         keyMaterial,
         { name: "AES-GCM", length: 256 },
         false,
@@ -117,9 +117,9 @@ export async function decryptWallet(encryptedData: string, password: string): Pr
     const { salt, iv, data } = JSON.parse(encryptedData);
     const key = await deriveKey(password, hexToBytes(salt));
     const decrypted = await crypto.subtle.decrypt(
-        { name: "AES-GCM", iv: hexToBytes(iv) },
+        { name: "AES-GCM", iv: hexToBytes(iv).buffer as ArrayBuffer },
         key,
-        hexToBytes(data)
+        hexToBytes(data).buffer as ArrayBuffer
     );
     const decoder = new TextDecoder();
     return JSON.parse(decoder.decode(decrypted));

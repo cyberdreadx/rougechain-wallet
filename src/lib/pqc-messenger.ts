@@ -33,7 +33,7 @@ export interface Message {
     readAt?: string;
     createdAt: string;
     plaintext?: string;
-    signatureValid?: boolean | null;
+    signatureValid?: boolean;
     senderDisplayName?: string;
     // Media support
     messageType?: MessageType;
@@ -52,31 +52,54 @@ export interface Conversation {
     participantIds?: string[];
     participants?: Wallet[];
     lastMessage?: Message;
-    unreadCount?: number;
     lastMessageAt?: string;
+    lastSenderId?: string;
     lastMessagePreview?: string;
+    unreadCount?: number;
 }
 
 const MESSENGER_API_PREFIX = "/messenger";
 const BLOCKED_WALLETS_KEY = "pqc_blocked_wallets";
-const PRIVACY_SETTINGS_KEY = "pqc_privacy_settings";
+const TOFU_STORE_KEY = "pqc_tofu_fingerprints";
 
-// --- Privacy settings ---
+// --- Key fingerprint & TOFU helpers ---
 
-export interface PrivacySettings {
-    discoverable: boolean;
+export async function keyFingerprint(publicKeyHex: string): Promise<string> {
+    if (!publicKeyHex) return "";
+    const hash = await crypto.subtle.digest("SHA-256", hexToBytes(publicKeyHex));
+    const hex = bytesToHex(new Uint8Array(hash));
+    return hex.substring(0, 32).replace(/(.{4})/g, "$1 ").trim().toUpperCase();
 }
 
-export function getPrivacySettings(): PrivacySettings {
-    try {
-        const stored = localStorage.getItem(PRIVACY_SETTINGS_KEY);
-        if (stored) return { discoverable: JSON.parse(stored).discoverable ?? true };
-    } catch { /* ignore */ }
-    return { discoverable: true };
+interface TofuEntry {
+    walletId: string;
+    signingFingerprint: string;
+    encryptionFingerprint: string;
+    firstSeen: number;
 }
 
-export function savePrivacySettings(settings: PrivacySettings): void {
-    localStorage.setItem(PRIVACY_SETTINGS_KEY, JSON.stringify(settings));
+function loadTofuStore(): Record<string, TofuEntry> {
+    try { const raw = localStorage.getItem(TOFU_STORE_KEY); return raw ? JSON.parse(raw) : {}; } catch { return {}; }
+}
+
+function saveTofuStore(store: Record<string, TofuEntry>): void {
+    localStorage.setItem(TOFU_STORE_KEY, JSON.stringify(store));
+}
+
+export async function checkTofu(wallet: Wallet): Promise<{ trusted: boolean; changed: boolean; firstSeen: number }> {
+    const store = loadTofuStore();
+    const sigFp = await keyFingerprint(wallet.signingPublicKey);
+    const encFp = await keyFingerprint(wallet.encryptionPublicKey);
+    const key = wallet.id;
+    const existing = store[key];
+    if (!existing) {
+        store[key] = { walletId: wallet.id, signingFingerprint: sigFp, encryptionFingerprint: encFp, firstSeen: Date.now() };
+        saveTofuStore(store);
+        return { trusted: true, changed: false, firstSeen: Date.now() };
+    }
+    const changed = existing.signingFingerprint !== sigFp || existing.encryptionFingerprint !== encFp;
+    if (changed) { store[key] = { ...existing, signingFingerprint: sigFp, encryptionFingerprint: encFp }; saveTofuStore(store); }
+    return { trusted: !changed, changed, firstSeen: existing.firstSeen };
 }
 
 // --- Block list helpers ---
@@ -315,7 +338,6 @@ export function buildSignedRequest(
 export async function registerWalletOnNode(wallet: Wallet | WalletWithPrivateKeys): Promise<void> {
     const base = getCoreApiBaseUrl();
     if (!base) throw new Error("Node not configured");
-    const privacy = getPrivacySettings();
 
     const priv = (wallet as WalletWithPrivateKeys).signingPrivateKey;
     if (!priv) throw new Error("Signing private key required for v2 registration");
@@ -326,7 +348,7 @@ export async function registerWalletOnNode(wallet: Wallet | WalletWithPrivateKey
             displayName: wallet.displayName,
             signingPublicKey: wallet.signingPublicKey,
             encryptionPublicKey: wallet.encryptionPublicKey,
-            discoverable: privacy.discoverable,
+            discoverable: true,
         },
         priv,
         wallet.signingPublicKey,
@@ -347,7 +369,7 @@ async function kemEncryptPlaintext(
 ): Promise<{ kemCipherText: string; iv: string; encryptedContent: string }> {
     const { cipherText, sharedSecret } = ml_kem768.encapsulate(encryptionPublicKey);
 
-    const keyMaterial = await crypto.subtle.importKey("raw", sharedSecret, "HKDF", false, ["deriveKey"]);
+    const keyMaterial = await crypto.subtle.importKey("raw", sharedSecret.buffer as ArrayBuffer, "HKDF", false, ["deriveKey"]);
     const aesKey = await crypto.subtle.deriveKey(
         { name: "HKDF", hash: "SHA-256", salt: new Uint8Array(32), info: new TextEncoder().encode("pqc-msg") },
         keyMaterial,
@@ -414,7 +436,7 @@ async function kemDecryptContent(
 ): Promise<string> {
     const sharedSecret = ml_kem768.decapsulate(hexToBytes(kemCipherTextHex), encryptionPrivateKey);
 
-    const keyMaterial = await crypto.subtle.importKey("raw", sharedSecret, "HKDF", false, ["deriveKey"]);
+    const keyMaterial = await crypto.subtle.importKey("raw", sharedSecret.buffer as ArrayBuffer, "HKDF", false, ["deriveKey"]);
     const aesKey = await crypto.subtle.deriveKey(
         { name: "HKDF", hash: "SHA-256", salt: new Uint8Array(32), info: new TextEncoder().encode("pqc-msg") },
         keyMaterial,
@@ -424,9 +446,9 @@ async function kemDecryptContent(
     );
 
     const decrypted = await crypto.subtle.decrypt(
-        { name: "AES-GCM", iv: hexToBytes(ivHex) },
+        { name: "AES-GCM", iv: hexToBytes(ivHex).buffer as ArrayBuffer },
         aesKey,
-        hexToBytes(encryptedContentHex)
+        hexToBytes(encryptedContentHex).buffer as ArrayBuffer
     );
 
     return new TextDecoder().decode(decrypted);
@@ -438,16 +460,14 @@ export async function decryptMessage(
     senderSigningPublicKey: string,
     signature: string,
     isSender: boolean = false
-): Promise<{ plaintext: string; signatureValid: boolean | null }> {
-    let signatureValid: boolean | null = null;
-    if (signature && signature.length > 0) {
+): Promise<{ plaintext: string; signatureValid: boolean }> {
+    let signatureValid = false;
+    if (senderSigningPublicKey && signature) {
         try {
             const sigBytes = hexToBytes(signature);
             const pubKeyBytes = hexToBytes(senderSigningPublicKey);
             signatureValid = ml_dsa65.verify(sigBytes, new TextEncoder().encode(encryptedPackage), pubKeyBytes);
-        } catch {
-            signatureValid = false;
-        }
+        } catch { /* noop */ }
     }
 
     const parsed = JSON.parse(encryptedPackage);
@@ -530,13 +550,11 @@ export async function createConversation(
     const base = getCoreApiBaseUrl();
     if (!base) throw new Error("Node not configured");
 
-    const payload: Record<string, unknown> = {
-        participantIds,
-        isGroup: participantIds.length > 2,
-    };
-    if (name) payload.name = name;
-
-    const signed = buildSignedRequest(payload, wallet.signingPrivateKey, wallet.signingPublicKey);
+    const signed = buildSignedRequest(
+        { participantIds, name, isGroup: participantIds.length > 2 },
+        wallet.signingPrivateKey,
+        wallet.signingPublicKey,
+    );
     const res = await fetch(`${base}/v2/messenger/conversations`, {
         method: "POST",
         headers: { ...getCoreApiHeaders(), "Content-Type": "application/json" },
@@ -548,15 +566,15 @@ export async function createConversation(
     return normalizeConversation(data.conversation || data);
 }
 
-export async function getConversations(walletId: string, currentWallet?: WalletWithPrivateKeys): Promise<Conversation[]> {
+export async function getConversations(walletId: string, currentWallet?: Wallet | WalletWithPrivateKeys): Promise<Conversation[]> {
     const base = getCoreApiBaseUrl();
     if (!base) return [];
     try {
         const all = await cachedFetch("messengerConversations", walletId, async () => {
+            const privKey = (currentWallet as WalletWithPrivateKeys)?.signingPrivateKey;
             let convos: any[];
-            const priv = currentWallet?.signingPrivateKey;
-            if (priv && currentWallet?.signingPublicKey) {
-                const signed = buildSignedRequest({}, priv, currentWallet.signingPublicKey);
+            if (privKey && currentWallet?.signingPublicKey) {
+                const signed = buildSignedRequest({}, privKey, currentWallet.signingPublicKey);
                 const res = await fetch(`${base}/v2/messenger/conversations/list`, {
                     method: "POST",
                     headers: { ...getCoreApiHeaders(), "Content-Type": "application/json" },
@@ -568,7 +586,10 @@ export async function getConversations(walletId: string, currentWallet?: WalletW
             } else {
                 const apiBase = getMessengerApiBase();
                 if (!apiBase) return [];
-                const res = await fetch(`${apiBase}/conversations?walletId=${walletId}`, {
+                const params = new URLSearchParams({ walletId });
+                if (currentWallet?.signingPublicKey) params.set("signingPublicKey", currentWallet.signingPublicKey);
+                if (currentWallet?.encryptionPublicKey) params.set("encryptionPublicKey", currentWallet.encryptionPublicKey);
+                const res = await fetch(`${apiBase}/conversations?${params.toString()}`, {
                     headers: getCoreApiHeaders(),
                 });
                 if (!res.ok) return [];
@@ -592,8 +613,8 @@ export async function getConversations(walletId: string, currentWallet?: WalletW
                 const conv = normalizeConversation(raw);
                 if ((!conv.participants || conv.participants.length === 0) && conv.participantIds?.length) {
                     conv.participants = conv.participantIds
-                        .map((id: string) => {
-                            if (currentWallet && currentIds.has(id)) return currentWallet as Wallet;
+                        .map((id: any) => {
+                            if (currentWallet && currentIds.has(id)) return currentWallet;
                             const w = walletMap.get(id);
                             if (w) return w;
                             const fallback = allWallets.find(aw =>
@@ -608,62 +629,13 @@ export async function getConversations(walletId: string, currentWallet?: WalletW
         });
         const blocked = new Set(getBlockedWalletIds());
         if (blocked.size === 0) return all;
-        return all.filter(conv => {
-            const hasBlocked = conv.participants?.some(p =>
+        return all.filter((conv: any) => {
+            const hasBlocked = conv.participants?.some((p: any) =>
                 blocked.has(p.id) || blocked.has(p.signingPublicKey) || blocked.has(p.encryptionPublicKey)
-            ) || conv.participantIds?.some(id => blocked.has(id));
+            ) || conv.participantIds?.some((id: any) => blocked.has(id));
             return !hasBlocked;
         });
     } catch { return []; }
-}
-
-export async function getTotalUnreadCount(wallet: WalletWithPrivateKeys): Promise<number> {
-    const base = getCoreApiBaseUrl();
-    if (!base) return 0;
-    try {
-        const signed = buildSignedRequest({}, wallet.signingPrivateKey, wallet.signingPublicKey);
-        const res = await fetch(`${base}/v2/messenger/conversations/list`, {
-            method: "POST",
-            headers: { ...getCoreApiHeaders(), "Content-Type": "application/json" },
-            body: JSON.stringify(signed),
-        });
-        if (!res.ok) return 0;
-        const data = await res.json();
-        const convos = data.conversations || [];
-        let total = 0;
-        for (const c of convos) {
-            total += (c.unread_count ?? c.unreadCount ?? 0);
-        }
-        return total;
-    } catch { return 0; }
-}
-
-export async function markConversationRead(
-    wallet: WalletWithPrivateKeys,
-    conversationId: string,
-    messages: Message[],
-): Promise<void> {
-    const base = getCoreApiBaseUrl();
-    if (!base) return;
-    const unread = messages.filter(m => {
-        const isOwn = m.senderWalletId === wallet.id || m.senderWalletId === wallet.signingPublicKey;
-        return !isOwn && !m.readAt;
-    });
-    if (unread.length === 0) return;
-    await Promise.allSettled(
-        unread.map(m => {
-            const signed = buildSignedRequest(
-                { messageId: m.id, conversationId },
-                wallet.signingPrivateKey,
-                wallet.signingPublicKey,
-            );
-            return fetch(`${base}/v2/messenger/messages/read`, {
-                method: "POST",
-                headers: { ...getCoreApiHeaders(), "Content-Type": "application/json" },
-                body: JSON.stringify(signed),
-            });
-        }),
-    );
 }
 
 export async function deleteConversation(wallet: WalletWithPrivateKeys, conversationId: string): Promise<void> {
@@ -694,13 +666,15 @@ export async function sendMessage(
     messageType: MessageType = "text",
     spoiler: boolean = false
 ): Promise<Message> {
-    const base = getCoreApiBaseUrl();
-    if (!base) throw new Error("Node not configured");
+    const apiBase = getMessengerApiBase();
+    if (!apiBase) throw new Error("Node not configured");
 
     const { encryptedPackage, signature } = await encryptMessage(
         plaintext, recipientEncryptionPublicKey, wallet.signingPrivateKey,
         wallet.encryptionPublicKey
     );
+
+    const base = getCoreApiBaseUrl();
     const signed = buildSignedRequest(
         {
             conversationId,
@@ -796,14 +770,20 @@ export async function getMessages(
                 msg.senderWalletId === wallet.encryptionPublicKey;
 
             let plaintext = "[Unable to decrypt]";
-            let signatureValid: boolean | null = null;
+            let signatureValid = false;
 
             let sender = findParticipant(allParticipants, msg.senderWalletId);
-            if (!sender && msg.senderWalletId && allParticipants === participants) {
+            if (!sender && msg.senderWalletId) {
                 try {
                     const wallets = await getWallets();
                     sender = findParticipant(wallets, msg.senderWalletId);
                 } catch { /* ignore */ }
+            }
+            // Last resort: in 1:1 chats, use the other participant
+            if (!sender && allParticipants.length >= 2) {
+                sender = allParticipants.find(p =>
+                    p.id !== wallet.id && p.signingPublicKey !== wallet.signingPublicKey
+                );
             }
 
             try {
@@ -848,7 +828,7 @@ export async function getMessages(
                 }
             }
 
-            const rawMsgType = (raw.message_type || raw.messageType || "text") as MessageType;
+            const rawMsgType = ((raw as any).message_type || (raw as any).messageType || "text") as MessageType;
 
             const mediaInfo = plaintext !== "[Unable to decrypt]"
                 ? parseMediaPayload(plaintext)
@@ -867,18 +847,10 @@ export async function getMessages(
                 messageType: mediaInfo?.messageType || rawMsgType,
                 mediaUrl: mediaInfo?.mediaUrl,
                 mediaFileName: mediaInfo?.mediaFileName,
-                spoiler: raw.spoiler ?? false,
+                spoiler: (raw as any).spoiler ?? false,
             });
         }
-        // Filter out expired self-destruct messages client-side
-        const now = Date.now();
-        return messages.filter(m => {
-            if (!m.selfDestruct || !m.readAt) return true;
-            const readTime = new Date(m.readAt).getTime();
-            if (isNaN(readTime)) return true;
-            const ttl = (m.destructAfterSeconds ?? 30) * 1000;
-            return now < readTime + ttl;
-        });
+        return messages;
     } catch { return []; }
 }
 
@@ -912,8 +884,9 @@ function normalizeConversation(raw: any): Conversation {
             signingPublicKey: p.signing_public_key || p.signingPublicKey || "",
             encryptionPublicKey: p.encryption_public_key || p.encryptionPublicKey || "",
         })),
-        unreadCount: raw.unread_count ?? raw.unreadCount ?? 0,
         lastMessageAt: raw.last_message_at || raw.lastMessageAt,
+        lastSenderId: raw.last_sender_id || raw.lastSenderId,
         lastMessagePreview: raw.last_message_preview || raw.lastMessagePreview,
+        unreadCount: raw.unread_count ?? raw.unreadCount,
     };
 }
